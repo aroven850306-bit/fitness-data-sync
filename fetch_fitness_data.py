@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Garmin Connect + Strava 데이터 수집 스크립트 (GARMIN_API_KEY 및 GARMIN_EMAIL/PASSWORD 모두 지원)
-- 기존에 등록된 GARMIN_API_KEY(garth OAuth 토큰 문자열, Base64/JSON 토큰 번들, 또는 이메일:비밀번호)를 그대로 사용하여 로그인
+- 별도 외부 패키지(garth 직접 import) 없이 garminconnect 내장 모듈 및 표준 라이브러리로 동작
+- 기존에 등록된 GARMIN_API_KEY(garth OAuth 토큰 문자열, Base64/JSON 토큰 번들, 또는 이메일:비밀번호) 그대로 사용
 - Garmin 활동 전체 누적 수집 및 MyFitnessPal 자동 중복 제거
 - 가민 웰니스 확장: HRV 기준 범위(baseline), 수면 단계/점수, 안정시 심박·스트레스·바디배터리 대체 엔드포인트 보완
 - 활동별 원본 .fit 파일 자동 다운로드 (이미 존재하는 파일은 건너뛰어 누적 유지)
@@ -18,7 +19,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import garth
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -45,7 +45,7 @@ ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
 def decode_garmin_api_key(raw_key: str) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     GARMIN_API_KEY에서 인증 수단 추출:
-    반환값: (email, password, token_dir_path, garth_dumps_str)
+    반환값: (email, password, token_dir_path, raw_token_str)
     """
     raw_key = raw_key.strip()
     if not raw_key:
@@ -96,7 +96,6 @@ def decode_garmin_api_key(raw_key: str) -> Tuple[str, str, Optional[str], Option
                 if len(parts) == 2 and "@" in parts[0] and parts[1]:
                     return parts[0], parts[1], None, None
 
-    # JSON/구분자가 아니면 garth.dumps()로 생성된 직렬화 토큰 문자열일 수 있음
     return "", "", None, raw_key
 
 
@@ -107,9 +106,9 @@ def init_garmin() -> Garmin:
     raw_key = os.getenv("GARMIN_API_KEY", "").strip()
 
     token_dir_from_key: Optional[str] = None
-    garth_dumps_str: Optional[str] = None
+    raw_token_str: Optional[str] = None
     if (not email or not password) and raw_key:
-        k_email, k_pass, token_dir_from_key, garth_dumps_str = decode_garmin_api_key(raw_key)
+        k_email, k_pass, token_dir_from_key, raw_token_str = decode_garmin_api_key(raw_key)
         email = email or k_email
         password = password or k_pass
 
@@ -132,26 +131,30 @@ def init_garmin() -> Garmin:
         except Exception as e:
             print(f"[WARN] GARMIN_API_KEY 토큰 디렉토리 로그인 실패: {e}", flush=True)
 
-    # 3) GARMIN_API_KEY가 garth.dumps() 직렬화 문자열인 경우
-    if garth_dumps_str:
+    # 3) GARMIN_API_KEY가 단일 토큰/직렬화 문자열인 경우 (client.login(tokenstore) 또는 client.garth.loads)
+    if raw_token_str:
         try:
-            garth.client.loads(garth_dumps_str)
-            client.garth = garth.client
-            client.display_name = client.garth.profile.get("displayName")
-            client.full_name = client.garth.profile.get("fullName")
+            client.login(raw_token_str)
             return client
-        except Exception as e:
-            print(f"[WARN] garth.loads 로그인 실패: {e}", flush=True)
+        except Exception as e1:
+            print(f"[WARN] client.login(GARMIN_API_KEY) 시도 실패: {e1}", flush=True)
+            if hasattr(client, "garth") and hasattr(client.garth, "loads"):
+                try:
+                    client.garth.loads(raw_token_str)
+                    return client
+                except Exception as e2:
+                    print(f"[WARN] client.garth.loads 시도 실패: {e2}", flush=True)
 
     # 4) 이메일/비밀번호 로그인
     if email and password:
         client.login()
         token_path.mkdir(parents=True, exist_ok=True)
-        client.garth.dump(str(token_path))
+        if hasattr(client, "garth") and hasattr(client.garth, "dump"):
+            client.garth.dump(str(token_path))
         return client
 
     raise ValueError(
-        "GARMIN_API_KEY 인증에 실패했습니다. 기존에 쓰시던 GARMIN_API_KEY 값의 형식(토큰/키/이메일:비밀번호)을 확인해 주세요."
+        "GARMIN_API_KEY 인증에 실패했습니다. 위 [WARN] 로그의 상세 원인을 확인해 주세요."
     )
 
 
