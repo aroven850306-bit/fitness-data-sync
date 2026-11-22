@@ -160,26 +160,41 @@ def fetch_garmin_data():
                 "vo2_max": act.get("vO2MaxValue"),
             })
 
+            # 최신 5개 사이클링 활동의 원본 FIT 파일 다운로드 및 압축 해제
             if fit_download_count < 5 and act_id:
-                fit_url = f"{working_base}/download-service/files/activity/{act_id}"
-                fit_res = requests.get(fit_url, headers=auth_headers)
-                if fit_res.status_code == 200:
-                    try:
-                        with zipfile.ZipFile(io.BytesIO(fit_res.content)) as zf:
-                            for member in zf.namelist():
-                                if member.lower().endswith(".fit"):
-                                    fit_filename = f"fit_files/{date_prefix}_{act_id}.fit"
-                                    with open(fit_filename, "wb") as f:
-                                        f.write(zf.read(member))
-                                    fit_download_count += 1
-                                    print(f"📥 원본 FIT 저장 완료: {fit_filename}", flush=True)
-                    except Exception as e:
-                        print(f"⚠️ FIT 압축 해제 실패 (ID {act_id}):", e, flush=True)
+                fit_candidates = [
+                    f"{working_base}/download-service/files/activity/{act_id}",
+                    f"{working_base}/personal-api/rest/activities/{act_id}/fit",
+                    f"https://connectapi.garmin.com/download-service/files/activity/{act_id}",
+                ]
+                fit_headers = {"Authorization": f"Bearer {access_token}"}
+                for fit_url in fit_candidates:
+                    fit_res = requests.get(fit_url, headers=fit_headers)
+                    if fit_res.status_code == 200 and len(fit_res.content) > 100:
+                        if zipfile.is_zipfile(io.BytesIO(fit_res.content)):
+                            with zipfile.ZipFile(io.BytesIO(fit_res.content)) as zf:
+                                for member in zf.namelist():
+                                    if member.lower().endswith(".fit"):
+                                        fit_filename = f"fit_files/{date_prefix}_{act_id}.fit"
+                                        with open(fit_filename, "wb") as f:
+                                            f.write(zf.read(member))
+                                        fit_download_count += 1
+                                        print(f"📥 원본 FIT(ZIP) 저장 완료: {fit_filename}", flush=True)
+                        else:
+                            fit_filename = f"fit_files/{date_prefix}_{act_id}.fit"
+                            with open(fit_filename, "wb") as f:
+                                f.write(fit_res.content)
+                            fit_download_count += 1
+                            print(f"📥 원본 FIT 저장 완료: {fit_filename}", flush=True)
+                        break
+                    else:
+                        print(f"⚠️ FIT 경로 시도 [{fit_url}] -> 상태 코드: {fit_res.status_code}", flush=True)
 
     df_garmin_acts = pd.DataFrame(garmin_act_list)
     df_garmin_acts.to_csv("garmin_activities.csv", index=False, encoding="utf-8-sig")
     print(f"✅ 가민 활동 {len(df_garmin_acts)}건 및 원본 FIT {fit_download_count}개 저장 완료.", flush=True)
 
+    # 최근 14일치 일별 건강/회복/HRV 지표 수집
     health_list = []
     for i in range(14):
         target_date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
