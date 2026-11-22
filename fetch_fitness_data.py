@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Garmin Connect + Strava 데이터 수집 스크립트 (기존 GARMIN_API_KEY 및 GARMIN_EMAIL/PASSWORD 모두 지원)
-- 기존에 등록된 GARMIN_API_KEY(JSON, 'email:password' 문자열, 또는 base64 인코딩 값)를 자동 파싱하여 로그인
+Garmin Connect + Strava 데이터 수집 스크립트
+- 기존 GARMIN_API_KEY(garth 토큰 디렉토리/JSON/Base64/이메일:비밀번호) 및 GARMIN_EMAIL/PASSWORD 모두 지원
 - Garmin 활동 전체 누적 수집 및 MyFitnessPal 자동 중복 제거
 - 가민 웰니스 확장: HRV 기준 범위(baseline), 수면 단계/점수, 안정시 심박·스트레스·바디배터리 대체 엔드포인트 보완
 - 활동별 원본 .fit 파일 자동 다운로드 (이미 존재하는 파일은 건너뛰어 누적 유지)
@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import os
+import tempfile
 import time
 import zipfile
 from datetime import datetime, timedelta
@@ -40,27 +41,20 @@ WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
 ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
 
 
-def resolve_garmin_credentials() -> Tuple[str, str, Optional[str]]:
+def decode_garmin_api_key(raw_key: str) -> Tuple[str, str, Optional[str]]:
     """
-    GARMIN_EMAIL/GARMIN_PASSWORD 또는 기존 GARMIN_API_KEY에서 인증 정보를 자동 추출.
-    지원 형식:
-    1) GARMIN_EMAIL + GARMIN_PASSWORD 환경변수
-    2) GARMIN_API_KEY 가 JSON 문자열인 경우: {"email": "...", "password": "..."} 또는 {"username": "...", "password": "..."}
-    3) GARMIN_API_KEY 가 "email:password" 또는 "email|password" 또는 줄바꿈 구분 문자열인 경우
-    4) GARMIN_API_KEY 가 Base64 인코딩된 JSON 또는 token dump 문자열인 경우
+    GARMIN_API_KEY 값을 분석하여 (email, password, token_dir_path) 반환.
+    garminconnect의 client.login(tokenstore)는 '디렉토리 경로'를 기대하므로
+    토큰 JSON/Base64인 경우 임시 디렉토리에 oauth1_token.json / oauth2_token.json 파일을 생성하여 경로를 넘깁니다.
     """
-    email = os.getenv("GARMIN_EMAIL", "").strip()
-    password = os.getenv("GARMIN_PASSWORD", "").strip()
-    if email and password:
-        return email, password, None
-
-    raw_key = os.getenv("GARMIN_API_KEY", "").strip()
+    raw_key = raw_key.strip()
     if not raw_key:
         return "", "", None
 
     candidates = [raw_key]
     try:
-        decoded = base64.b64decode(raw_key).decode("utf-8").strip()
+        padded = raw_key + "=" * ((4 - len(raw_key) % 4) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8", errors="ignore").strip()
         if decoded:
             candidates.append(decoded)
     except Exception:
@@ -71,7 +65,24 @@ def resolve_garmin_credentials() -> Tuple[str, str, Optional[str]]:
             try:
                 data = json.loads(cand)
                 if "oauth1_token" in data or "oauth2_token" in data:
-                    return "", "", cand
+                    tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_tokens_"))
+                    if "oauth1_token" in data:
+                        (tmp_dir / "oauth1_token.json").write_text(
+                            json.dumps(data["oauth1_token"]), encoding="utf-8"
+                        )
+                    if "oauth2_token" in data:
+                        (tmp_dir / "oauth2_token.json").write_text(
+                            json.dumps(data["oauth2_token"]), encoding="utf-8"
+                        )
+                    return "", "", str(tmp_dir)
+
+                if "access_token" in data and "refresh_token" in data:
+                    tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_tokens_"))
+                    (tmp_dir / "oauth2_token.json").write_text(
+                        json.dumps(data), encoding="utf-8"
+                    )
+                    return "", "", str(tmp_dir)
+
                 u = str(data.get("email") or data.get("username") or data.get("user") or "").strip()
                 p = str(data.get("password") or data.get("pass") or data.get("pwd") or "").strip()
                 if u and p:
@@ -85,12 +96,21 @@ def resolve_garmin_credentials() -> Tuple[str, str, Optional[str]]:
                 if len(parts) == 2 and "@" in parts[0] and parts[1]:
                     return parts[0], parts[1], None
 
-    return "", "", raw_key
+    return "", "", None
 
 
 def init_garmin() -> Garmin:
-    """토큰 캐시 및 기존 GARMIN_API_KEY를 우선 사용하여 Garmin Connect 클라이언트 초기화"""
-    email, password, token_blob = resolve_garmin_credentials()
+    """토큰 캐시, GARMIN_API_KEY, GARMIN_EMAIL/PASSWORD 순으로 Garmin Connect 클라이언트 초기화"""
+    email = os.getenv("GARMIN_EMAIL", "").strip()
+    password = os.getenv("GARMIN_PASSWORD", "").strip()
+    raw_key = os.getenv("GARMIN_API_KEY", "").strip()
+
+    token_dir_from_key: Optional[str] = None
+    if (not email or not password) and raw_key:
+        k_email, k_pass, token_dir_from_key = decode_garmin_api_key(raw_key)
+        email = email or k_email
+        password = password or k_pass
+
     client = Garmin(email, password)
     token_path = Path(GARMIN_TOKEN_DIR)
 
@@ -101,17 +121,20 @@ def init_garmin() -> Garmin:
         except Exception:
             pass
 
-    if token_blob:
+    if token_dir_from_key:
         try:
-            client.login(token_blob)
+            client.login(token_dir_from_key)
             return client
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] GARMIN_API_KEY 토큰 로그인 실패: {e}", flush=True)
 
     if not email or not password:
+        key_len = len(raw_key)
+        starts_brace = raw_key.startswith("{")
+        has_at = "@" in raw_key
         raise ValueError(
-            "GARMIN_API_KEY에서 이메일/비밀번호 또는 유효한 토큰을 읽지 못했습니다. "
-            "GARMIN_API_KEY 값을 '이메일:비밀번호' 또는 JSON 형식으로 확인하거나 GARMIN_EMAIL / GARMIN_PASSWORD 시크릿을 등록해 주세요."
+            f"GARMIN 인증 정보를 확인할 수 없습니다 (GARMIN_API_KEY 길이={key_len}, JSON여부={starts_brace}, '@'포함={has_at}). "
+            "GitHub Secrets에 GARMIN_EMAIL과 GARMIN_PASSWORD를 각각 등록해 주세요."
         )
 
     client.login()
