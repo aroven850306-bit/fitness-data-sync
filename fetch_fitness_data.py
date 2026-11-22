@@ -1,235 +1,425 @@
+#!/usr/bin/env python3
+"""
+Garmin Connect + Strava 데이터 수집 스크립트 (전체 업그레이드 버전)
+- Garmin 활동 전체(22개 이상) 누적 수집 및 MyFitnessPal 자동 중복 제거
+- 가민 웰니스 확장: HRV 기준 범위(baseline), 수면 단계/점수, 안정시 심박·스트레스·바디배터리 대체 엔드포인트 보완
+- 활동별 원본 .fit 파일 자동 다운로드 (이미 존재하는 파일은 건너뛰어 누적 유지)
+"""
+
 import os
-import io
+import time
 import zipfile
-import requests
-import pandas as pd
+import io
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# GitHub Secrets에서 환경 변수 불러오기 (앞뒤 공백 자동 제거)
-STRAVA_CLIENT_ID = (os.environ.get("STRAVA_CLIENT_ID") or "").strip()
-STRAVA_CLIENT_SECRET = (os.environ.get("STRAVA_CLIENT_SECRET") or "").strip()
-STRAVA_REFRESH_TOKEN = (os.environ.get("STRAVA_REFRESH_TOKEN") or "").strip()
-GARMIN_API_KEY = (os.environ.get("GARMIN_API_KEY") or "").strip()
+import pandas as pd
+import requests
+from dotenv import load_dotenv
+from garminconnect import Garmin
 
+load_dotenv()
 
-def fetch_strava_data():
-    if not all([STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, STRAVA_REFRESH_TOKEN]):
-        print("⚠️ 스트라바 API 키가 모두 설정되지 않아 건너뜁니다.", flush=True)
-        return
+DATA_DIR = Path(os.getenv("FITNESS_DATA_DIR", "./fitness_data"))
+FIT_DIR = DATA_DIR / "fit_files"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+FIT_DIR.mkdir(parents=True, exist_ok=True)
 
-    auth_url = "https://www.strava.com/oauth/token"
-    payload = {
-        "client_id": STRAVA_CLIENT_ID,
-        "client_secret": STRAVA_CLIENT_SECRET,
-        "refresh_token": STRAVA_REFRESH_TOKEN,
-        "grant_type": "refresh_token",
-    }
-    res = requests.post(auth_url, data=payload).json()
-    access_token = res.get("access_token")
+GARMIN_EMAIL = os.getenv("GARMIN_EMAIL", "")
+GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "")
+GARMIN_TOKEN_DIR = os.getenv("GARMIN_TOKEN_DIR", str(DATA_DIR / ".garmin_tokens"))
 
-    if not access_token:
-        print("❌ 스트라바 토큰 발급 실패:", res, flush=True)
-        return
+STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "")
+STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "")
+STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "")
 
-    activities_url = "https://www.strava.com/api/v3/athlete/activities"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    params = {"per_page": 100, "page": 1}
-    activities = requests.get(activities_url, headers=headers, params=params).json()
-
-    if not isinstance(activities, list):
-        print("❌ 스트라바 데이터 조회 실패:", activities, flush=True)
-        return
-
-    ride_list = []
-    for act in activities:
-        if act.get("type") in ["Ride", "VirtualRide"]:
-            ride_list.append({
-                "id": act.get("id"),
-                "date": act.get("start_date_local"),
-                "name": act.get("name"),
-                "type": act.get("type"),
-                "distance_km": round(act.get("distance", 0) / 1000, 2),
-                "moving_time_min": round(act.get("moving_time", 0) / 60, 1),
-                "elevation_gain_m": act.get("total_elevation_gain"),
-                "avg_speed_kph": round(act.get("average_speed", 0) * 3.6, 1),
-                "avg_watts": act.get("average_watts"),
-                "weighted_avg_watts_NP": act.get("weighted_average_watts"),
-                "max_watts": act.get("max_watts"),
-                "kilojoules": act.get("kilojoules"),
-                "avg_cadence": act.get("average_cadence"),
-                "avg_hr": act.get("average_heartrate"),
-                "max_hr": act.get("max_heartrate"),
-                "suffer_score": act.get("suffer_score"),
-            })
-
-    df_strava = pd.DataFrame(ride_list)
-    df_strava.to_csv("strava_activities.csv", index=False, encoding="utf-8-sig")
-    print(f"✅ 스트라바 라이딩 데이터 {len(df_strava)}건 저장 완료.", flush=True)
+FTP_WATTS = float(os.getenv("FTP_WATTS", "195"))
+WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
+ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
 
 
-def get_garmin_access_token(api_key):
-    token_url = "https://personal.connectapi.garmin.com/personalapitoken-service/personal-api/personal-api-key/token"
-    headers = {
-        "Authorization": f"ApiKey {api_key}",
-    }
-    res = requests.post(token_url, headers=headers)
-    print(f"🔍 가민 토큰 발급 응답 코드: {res.status_code}", flush=True)
-    if res.status_code != 200:
-        print("❌ 가민 Access Token 발급 실패 상세:", res.text, flush=True)
+def init_garmin() -> Garmin:
+    """토큰 캐시를 우선 사용하여 Garmin Connect 클라이언트 초기화"""
+    client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
+    token_path = Path(GARMIN_TOKEN_DIR)
+    if token_path.exists():
+        try:
+            client.login(str(token_path))
+            return client
+        except Exception:
+            pass
+    client.login()
+    token_path.mkdir(parents=True, exist_ok=True)
+    client.garth.dump(str(token_path))
+    return client
+
+
+def is_myfitnesspal_duplicate(row: Dict[str, Any], existing_rows: List[Dict[str, Any]]) -> bool:
+    """
+    MyFitnessPal 연동으로 생성된 수동 중복 칼로리/운동 기록 필터링
+    예: 'Bicycling, 12-14 mph, moderate ... - MyFitnessPal' 등 파워/심박이 비어 있고 시간대가 겹치는 기록 제거
+    """
+    name = str(row.get("name", "")).lower()
+    if "myfitnesspal" in name:
+        return True
+
+    has_sensor = any(
+        pd.notna(row.get(k)) and float(row.get(k) or 0) > 0
+        for k in ("avg_power", "norm_power_NP", "avg_hr")
+    )
+    if has_sensor:
+        return False
+
+    try:
+        dt_curr = datetime.strptime(str(row["date"])[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return False
+
+    for prev in existing_rows:
+        try:
+            dt_prev = datetime.strptime(str(prev["date"])[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        if abs((dt_curr - dt_prev).total_seconds()) <= 600:
+            prev_has_sensor = any(
+                pd.notna(prev.get(k)) and float(prev.get(k) or 0) > 0
+                for k in ("avg_power", "norm_power_NP", "avg_hr")
+            )
+            if prev_has_sensor:
+                return True
+    return False
+
+
+def download_fit_file(client: Garmin, activity_id: int, start_local: str) -> Optional[Path]:
+    """개별 활동의 .fit 원본 파일을 다운로드하여 누적 보관"""
+    date_prefix = str(start_local)[:10] if start_local else "unknown"
+    target_path = FIT_DIR / f"{date_prefix}_{activity_id}.fit"
+    if target_path.exists() and target_path.stat().st_size > 0:
+        return target_path
+
+    try:
+        raw_bytes = client.download_activity(
+            activity_id, dl_fmt=client.ActivityDownloadFormat.ORIGINAL
+        )
+        if not raw_bytes:
+            return None
+
+        if raw_bytes[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+                fit_names = [n for n in zf.namelist() if n.lower().endswith(".fit")]
+                if not fit_names:
+                    return None
+                target_path.write_bytes(zf.read(fit_names[0]))
+        else:
+            target_path.write_bytes(raw_bytes)
+        return target_path
+    except Exception as e:
+        print(f"[WARN] FIT 다운로드 실패 (activity_id={activity_id}): {e}")
         return None
 
-    # 순수 문자열(text/plain) 또는 JSON 응답 모두 안전하게 처리
-    raw_text = res.text.strip().strip('"')
-    if raw_text.startswith("{"):
-        data = res.json()
-        return data.get("accessToken") or data.get("access_token") or data.get("token")
-    return raw_text
 
+def fetch_garmin_activities(client: Garmin, limit: int = ACTIVITY_LIMIT) -> pd.DataFrame:
+    """가민 활동 목록 수집 + 기존 CSV 병합 + MyFitnessPal 중복 제거 + 전체 FIT 누적 다운로드"""
+    csv_path = DATA_DIR / "garmin_activities.csv"
+    existing_df = pd.read_csv(csv_path) if csv_path.exists() else pd.DataFrame()
 
-def fetch_garmin_data():
-    if not GARMIN_API_KEY:
-        print("⚠️ GARMIN_API_KEY가 설정되지 않아 건너뜁니다.", flush=True)
-        return
+    raw_activities = client.get_activities(0, limit)
+    cleaned_rows: List[Dict[str, Any]] = []
 
-    access_token = get_garmin_access_token(GARMIN_API_KEY)
-    if not access_token:
-        return
-    print("✅ 가민 Personal API Access Token 발급 성공!", flush=True)
+    # 먼저 센서 데이터가 있는 실제 활동부터 정리
+    sorted_raw = sorted(
+        raw_activities,
+        key=lambda x: (
+            "myfitnesspal" in str(x.get("activityName", "")).lower(),
+            x.get("averagePower") is None and x.get("averageHR") is None,
+        ),
+    )
 
-    auth_headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-    }
-
-    # 가능한 가민 Personal API / Connect API 경로 순차 확인
-    base_candidates = [
-        "https://personal.connectapi.garmin.com",
-        "https://connectapi.garmin.com",
-    ]
-    
-    act_res = None
-    working_base = None
-    for base_url in base_candidates:
-        url = f"{base_url}/activitylist-service/activities/search/activities"
-        res = requests.get(url, headers=auth_headers, params={"start": 0, "limit": 30})
-        print(f"🔍 경로 테스트 [{base_url}] -> 상태 코드: {res.status_code}", flush=True)
-        if res.status_code == 200:
-            act_res = res
-            working_base = base_url
-            break
-        else:
-            print(f"   응답 내용: {res.text[:150]}", flush=True)
-
-    if act_res is None:
-        print("❌ 가민 활동 목록 조회에 모두 실패했습니다.", flush=True)
-        return
-
-    print(f"✅ 가민 활동 데이터 연결 성공! ({working_base})", flush=True)
-    activities = act_res.json()
-    garmin_act_list = []
-    os.makedirs("fit_files", exist_ok=True)
-    fit_download_count = 0
-
-    for act in activities:
+    for act in sorted_raw:
         act_type = act.get("activityType", {}).get("typeKey", "")
-        if "cycling" in act_type or "biking" in act_type or "ride" in act_type:
-            act_id = act.get("activityId")
-            start_local = act.get("startTimeLocal", "")
-            date_prefix = start_local[:10] if start_local else "unknown"
+        if "cycling" not in act_type and "biking" not in act_type:
+            continue
 
-            garmin_act_list.append({
-                "activity_id": act_id,
-                "date": start_local,
-                "name": act.get("activityName"),
-                "type": act_type,
-                "distance_km": round(act.get("distance", 0) / 1000, 2),
-                "duration_min": round(act.get("duration", 0) / 60, 1),
-                "elevation_gain_m": act.get("elevationGain"),
-                "avg_power": act.get("avgPower"),
-                "norm_power_NP": act.get("normPower"),
-                "max_power": act.get("maxPower"),
-                "max_20min_power": act.get("max20MinPower"),
-                "training_stress_score_TSS": act.get("trainingStressScore"),
-                "intensity_factor_IF": act.get("intensityFactor"),
-                "avg_hr": act.get("averageHR"),
-                "max_hr": act.get("maxHR"),
-                "avg_cadence": act.get("averageBikingCadenceInRevPerMinute"),
-                "left_right_balance": act.get("leftRightBalance"),
-                "aerobic_training_effect": act.get("aerobicTrainingEffect"),
-                "anaerobic_training_effect": act.get("anaerobicTrainingEffect"),
-                "vo2_max": act.get("vO2MaxValue"),
-            })
+        act_id = int(act["activityId"])
+        start_local = act.get("startTimeLocal", "")
+        duration_sec = act.get("duration") or 0
+        avg_power = act.get("averagePower")
+        np_watts = act.get("normPower")
+        tss = act.get("trainingStressScore")
+        if_val = act.get("intensityFactor")
 
-            # 최신 5개 사이클링 활동의 원본 FIT 파일 다운로드 및 압축 해제
-            if fit_download_count < 5 and act_id:
-                fit_candidates = [
-                    f"{working_base}/download-service/files/activity/{act_id}",
-                    f"{working_base}/personal-api/rest/activities/{act_id}/fit",
-                    f"https://connectapi.garmin.com/download-service/files/activity/{act_id}",
-                ]
-                fit_headers = {"Authorization": f"Bearer {access_token}"}
-                for fit_url in fit_candidates:
-                    fit_res = requests.get(fit_url, headers=fit_headers)
-                    if fit_res.status_code == 200 and len(fit_res.content) > 100:
-                        if zipfile.is_zipfile(io.BytesIO(fit_res.content)):
-                            with zipfile.ZipFile(io.BytesIO(fit_res.content)) as zf:
-                                for member in zf.namelist():
-                                    if member.lower().endswith(".fit"):
-                                        fit_filename = f"fit_files/{date_prefix}_{act_id}.fit"
-                                        with open(fit_filename, "wb") as f:
-                                            f.write(zf.read(member))
-                                        fit_download_count += 1
-                                        print(f"📥 원본 FIT(ZIP) 저장 완료: {fit_filename}", flush=True)
-                        else:
-                            fit_filename = f"fit_files/{date_prefix}_{act_id}.fit"
-                            with open(fit_filename, "wb") as f:
-                                f.write(fit_res.content)
-                            fit_download_count += 1
-                            print(f"📥 원본 FIT 저장 완료: {fit_filename}", flush=True)
-                        break
-                    else:
-                        print(f"⚠️ FIT 경로 시도 [{fit_url}] -> 상태 코드: {fit_res.status_code}", flush=True)
+        if pd.isna(if_val) and np_watts and FTP_WATTS > 0:
+            if_val = round(float(np_watts) / FTP_WATTS, 4)
+        if pd.isna(tss) and np_watts and duration_sec > 0 and FTP_WATTS > 0:
+            tss = round((duration_sec * float(np_watts) * float(if_val)) / (FTP_WATTS * 3600) * 100, 2)
 
-    df_garmin_acts = pd.DataFrame(garmin_act_list)
-    df_garmin_acts.to_csv("garmin_activities.csv", index=False, encoding="utf-8-sig")
-    print(f"✅ 가민 활동 {len(df_garmin_acts)}건 및 원본 FIT {fit_download_count}개 저장 완료.", flush=True)
+        row = {
+            "activity_id": act_id,
+            "date": start_local,
+            "name": act.get("activityName", ""),
+            "type": act_type,
+            "distance_km": round((act.get("distance") or 0) / 1000, 2),
+            "duration_min": round(duration_sec / 60, 1),
+            "elevation_gain_m": round(act.get("elevationGain") or 0, 1) if act.get("elevationGain") else None,
+            "avg_power": avg_power,
+            "norm_power_NP": np_watts,
+            "max_power": act.get("maxPower"),
+            "max_20min_power": act.get("max20MinPower"),
+            "training_stress_score_TSS": tss,
+            "intensity_factor_IF": if_val,
+            "avg_hr": act.get("averageHR"),
+            "max_hr": act.get("maxHR"),
+            "avg_cadence": act.get("averageBikingCadenceInRevPerMinute"),
+            "left_right_balance": act.get("leftRightBalance"),
+            "aerobic_training_effect": act.get("aerobicTrainingEffect"),
+            "anaerobic_training_effect": act.get("anaerobicTrainingEffect"),
+            "vo2_max": act.get("vO2MaxValue"),
+        }
 
-    # 최근 14일치 일별 건강/회복/HRV 지표 수집
-    health_list = []
-    for i in range(14):
-        target_date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-        daily_res = requests.get(f"{working_base}/usersummary-service/usersummary/daily/{target_date}", headers=auth_headers)
-        hrv_res = requests.get(f"{working_base}/hrv-service/hrv/{target_date}", headers=auth_headers)
-        sleep_res = requests.get(f"{working_base}/wellness-service/wellness/dailySleepData/{target_date}", headers=auth_headers)
+        if is_myfitnesspal_duplicate(row, cleaned_rows):
+            print(f"[INFO] MyFitnessPal 중복 활동 제외: {act_id} ({row['name']})")
+            continue
 
-        daily = daily_res.json() if daily_res.status_code == 200 else {}
-        hrv = hrv_res.json() if hrv_res.status_code == 200 else {}
-        sleep = sleep_res.json() if sleep_res.status_code == 200 else {}
+        cleaned_rows.append(row)
+        download_fit_file(client, act_id, start_local)
 
-        hrv_summary = hrv.get("hrvSummary", {}) if isinstance(hrv, dict) else {}
-        sleep_dto = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
-        sleep_scores = sleep_dto.get("sleepScores", {}).get("overall", {}) if isinstance(sleep_dto, dict) else {}
+    new_df = pd.DataFrame(cleaned_rows)
+    if not existing_df.empty and not new_df.empty:
+        combined = pd.concat([existing_df, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["activity_id"], keep="last")
+    elif not new_df.empty:
+        combined = new_df
+    else:
+        combined = existing_df
 
-        health_list.append({
-            "date": target_date,
-            "resting_hr": daily.get("restingHeartRate"),
-            "avg_stress": daily.get("averageStressLevel"),
-            "body_battery_high": daily.get("bodyBatteryHighestValue"),
-            "body_battery_low": daily.get("bodyBatteryLowestValue"),
-            "hrv_last_night_avg": hrv_summary.get("lastNightAvg"),
-            "hrv_status": hrv_summary.get("status"),
-            "sleep_score": sleep_scores.get("value"),
-            "sleep_hours": round(sleep_dto.get("sleepTimeSeconds", 0) / 3600, 1) if sleep_dto.get("sleepTimeSeconds") else None,
-            "steps": daily.get("totalSteps"),
-        })
+    if not combined.empty:
+        combined = combined[~combined["name"].astype(str).str.contains("MyFitnessPal", case=False, na=False)]
+        combined = combined.sort_values("date", ascending=False).reset_index(drop=True)
+        combined.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    df_garmin_health = pd.DataFrame(health_list)
-    df_garmin_health.to_csv("garmin_health.csv", index=False, encoding="utf-8-sig")
-    print(f"✅ 가민 건강/HRV 데이터 {len(df_garmin_health)}건 저장 완료.", flush=True)
+    return combined
+
+
+def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFrame:
+    """
+    가민 웰니스(HRV 기준 범위 + 수면/안정심박/스트레스/바디배터리 다중 엔드포인트 대체 경로) 수집
+    """
+    csv_path = DATA_DIR / "garmin_health.csv"
+    existing_df = pd.read_csv(csv_path) if csv_path.exists() else pd.DataFrame()
+
+    rows: List[Dict[str, Any]] = []
+    today = datetime.now().date()
+
+    for offset in range(days):
+        d_str = (today - timedelta(days=offset)).isoformat()
+
+        resting_hr = None
+        avg_stress = None
+        bb_high = None
+        bb_low = None
+        hrv_avg = None
+        hrv_status = None
+        hrv_base_low = None
+        hrv_base_high = None
+        sleep_score = None
+        sleep_hours = None
+        steps = None
+
+        # 1) 기본 일일 요약 (get_stats)
+        try:
+            stats = client.get_stats(d_str) or {}
+            resting_hr = stats.get("restingHeartRate")
+            avg_stress = stats.get("averageStressLevel")
+            bb_high = stats.get("bodyBatteryHighestValue")
+            bb_low = stats.get("bodyBatteryLowestValue")
+            steps = stats.get("totalSteps")
+        except Exception:
+            pass
+
+        # 2) 안정시 심박 대체 경로 (get_rhr_day / get_heart_rates)
+        if resting_hr is None:
+            try:
+                rhr_data = client.get_rhr_day(d_str) or {}
+                metrics_map = rhr_data.get("allMetrics", {}).get("metricsMap", {})
+                rhr_list = metrics_map.get("WELLNESS_RESTING_HEART_RATE", [])
+                if rhr_list:
+                    resting_hr = rhr_list[0].get("value")
+            except Exception:
+                pass
+        if resting_hr is None:
+            try:
+                hr_data = client.get_heart_rates(d_str) or {}
+                resting_hr = hr_data.get("restingHeartRate")
+            except Exception:
+                pass
+
+        # 3) 바디배터리 및 스트레스 대체 경로 (get_body_battery / get_stress_data)
+        if bb_high is None or bb_low is None:
+            try:
+                bb_list = client.get_body_battery(d_str, d_str) or []
+                if bb_list and isinstance(bb_list, list):
+                    bb_vals = [
+                        v[1]
+                        for entry in bb_list
+                        for v in (entry.get("bodyBatteryValuesArray") or [])
+                        if isinstance(v, (list, tuple)) and len(v) >= 2 and v[1] is not None
+                    ]
+                    if bb_vals:
+                        bb_high = max(bb_vals)
+                        bb_low = min(bb_vals)
+            except Exception:
+                pass
+
+        if avg_stress is None:
+            try:
+                stress_data = client.get_stress_data(d_str) or {}
+                avg_stress = stress_data.get("avgStressLevel")
+            except Exception:
+                pass
+
+        # 4) HRV 및 개인 기준 범위(baseline) 수집
+        try:
+            hrv_data = client.get_hrv_data(d_str) or {}
+            hrv_summary = hrv_data.get("hrvSummary") or {}
+            hrv_avg = hrv_summary.get("lastNightAvg")
+            hrv_status = hrv_summary.get("status")
+            baseline = hrv_summary.get("baseline") or {}
+            hrv_base_low = baseline.get("balancedLow")
+            hrv_base_high = baseline.get("balancedUpper")
+        except Exception:
+            pass
+
+        # 5) 수면 데이터 및 대체 경로 (get_sleep_data)
+        try:
+            sleep_data = client.get_sleep_data(d_str) or {}
+            daily_sleep = sleep_data.get("dailySleepDTO") or {}
+            sleep_sec = daily_sleep.get("sleepTimeSeconds")
+            if sleep_sec:
+                sleep_hours = round(float(sleep_sec) / 3600, 2)
+            sleep_scores = daily_sleep.get("sleepScores") or {}
+            overall = sleep_scores.get("overall") or {}
+            sleep_score = overall.get("value") or daily_sleep.get("sleepScore")
+        except Exception:
+            pass
+
+        rows.append(
+            {
+                "date": d_str,
+                "resting_hr": resting_hr,
+                "avg_stress": avg_stress,
+                "body_battery_high": bb_high,
+                "body_battery_low": bb_low,
+                "hrv_last_night_avg": hrv_avg,
+                "hrv_status": hrv_status,
+                "hrv_baseline_low": hrv_base_low,
+                "hrv_baseline_high": hrv_base_high,
+                "sleep_score": sleep_score,
+                "sleep_hours": sleep_hours,
+                "steps": steps,
+            }
+        )
+        time.sleep(0.15)
+
+    new_df = pd.DataFrame(rows)
+    if not existing_df.empty:
+        combined = pd.concat([existing_df, new_df], ignore_index=True)
+        combined = combined.sort_values("date").groupby("date", as_index=False).last()
+    else:
+        combined = new_df
+
+    combined = combined.sort_values("date", ascending=False).reset_index(drop=True)
+    combined.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    return combined
+
+
+def fetch_strava_activities(per_page: int = 100) -> pd.DataFrame:
+    """Strava API에서 활동 이력 수집 및 누적 저장"""
+    if not (STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET and STRAVA_REFRESH_TOKEN):
+        print("[INFO] Strava 환경변수가 설정되지 않아 Strava 수집을 건너뜁니다.")
+        return pd.DataFrame()
+
+    csv_path = DATA_DIR / "strava_activities.csv"
+    existing_df = pd.read_csv(csv_path) if csv_path.exists() else pd.DataFrame()
+
+    token_resp = requests.post(
+        "https://www.strava.com/oauth/token",
+        data={
+            "client_id": STRAVA_CLIENT_ID,
+            "client_secret": STRAVA_CLIENT_SECRET,
+            "refresh_token": STRAVA_REFRESH_TOKEN,
+            "grant_type": "refresh_token",
+        },
+        timeout=20,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json()["access_token"]
+
+    act_resp = requests.get(
+        "https://www.strava.com/api/v3/athlete/activities",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"per_page": per_page, "page": 1},
+        timeout=20,
+    )
+    act_resp.raise_for_status()
+    items = act_resp.json()
+
+    rows = []
+    for it in items:
+        if it.get("type") not in ("Ride", "VirtualRide"):
+            continue
+        rows.append(
+            {
+                "id": int(it["id"]),
+                "date": it.get("start_date_local"),
+                "name": it.get("name"),
+                "type": it.get("type"),
+                "distance_km": round((it.get("distance") or 0) / 1000, 2),
+                "moving_time_min": round((it.get("moving_time") or 0) / 60, 1),
+                "elevation_gain_m": round(it.get("total_elevation_gain") or 0, 1),
+                "avg_speed_kph": round((it.get("average_speed") or 0) * 3.6, 1),
+                "avg_watts": it.get("average_watts"),
+                "weighted_avg_watts_NP": it.get("weighted_average_watts"),
+                "max_watts": it.get("max_watts"),
+                "kilojoules": it.get("kilojoules"),
+                "avg_cadence": it.get("average_cadence"),
+                "avg_hr": it.get("average_heartrate"),
+                "max_hr": it.get("max_heartrate"),
+                "suffer_score": it.get("suffer_score"),
+            }
+        )
+
+    new_df = pd.DataFrame(rows)
+    if not existing_df.empty and not new_df.empty:
+        combined = pd.concat([existing_df, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["id"], keep="last")
+    else:
+        combined = new_df if not new_df.empty else existing_df
+
+    if not combined.empty:
+        combined = combined.sort_values("date", ascending=False).reset_index(drop=True)
+        combined.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    return combined
+
+
+def main() -> None:
+    print("=== Fitness 데이터 수집 시작 ===")
+    garmin_client = init_garmin()
+
+    act_df = fetch_garmin_activities(garmin_client, limit=ACTIVITY_LIMIT)
+    fit_count = len(list(FIT_DIR.glob("*.fit")))
+    print(f"[OK] Garmin 활동: {len(act_df)}건 / 누적 FIT 파일: {fit_count}개")
+
+    health_df = fetch_garmin_health(garmin_client, days=WELLNESS_DAYS)
+    print(f"[OK] Garmin 웰니스: {len(health_df)}일치 저장 완료")
+
+    strava_df = fetch_strava_activities(per_page=100)
+    if not strava_df.empty:
+        print(f"[OK] Strava 활동: {len(strava_df)}건 저장 완료")
+
+    print("=== 수집 완료 ===")
 
 
 if __name__ == "__main__":
-    print("🚀 피트니스 데이터 및 원본 FIT 수집을 시작합니다...", flush=True)
-    fetch_strava_data()
-    fetch_garmin_data()
-    print("🎉 모든 작업이 완료되었습니다.", flush=True)
+    main()
