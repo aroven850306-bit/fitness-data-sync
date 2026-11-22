@@ -4,14 +4,12 @@ import zipfile
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from garminconnect import Garmin
 
 # GitHub Secrets에서 환경 변수 불러오기
 STRAVA_CLIENT_ID = os.environ.get("STRAVA_CLIENT_ID")
 STRAVA_CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET")
 STRAVA_REFRESH_TOKEN = os.environ.get("STRAVA_REFRESH_TOKEN")
-GARMIN_EMAIL = os.environ.get("GARMIN_EMAIL")
-GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD")
+GARMIN_API_KEY = os.environ.get("GARMIN_API_KEY")
 
 
 def fetch_strava_data():
@@ -52,10 +50,8 @@ def fetch_strava_data():
                 "type": act.get("type"),
                 "distance_km": round(act.get("distance", 0) / 1000, 2),
                 "moving_time_min": round(act.get("moving_time", 0) / 60, 1),
-                "elapsed_time_min": round(act.get("elapsed_time", 0) / 60, 1),
                 "elevation_gain_m": act.get("total_elevation_gain"),
                 "avg_speed_kph": round(act.get("average_speed", 0) * 3.6, 1),
-                "max_speed_kph": round(act.get("max_speed", 0) * 3.6, 1),
                 "avg_watts": act.get("average_watts"),
                 "weighted_avg_watts_NP": act.get("weighted_average_watts"),
                 "max_watts": act.get("max_watts"),
@@ -64,7 +60,6 @@ def fetch_strava_data():
                 "avg_hr": act.get("average_heartrate"),
                 "max_hr": act.get("max_heartrate"),
                 "suffer_score": act.get("suffer_score"),
-                "device_watts": act.get("device_watts"),
             })
 
     df_strava = pd.DataFrame(ride_list)
@@ -73,124 +68,69 @@ def fetch_strava_data():
 
 
 def fetch_garmin_data():
-    if not GARMIN_EMAIL or not GARMIN_PASSWORD:
-        print("⚠️ 가민 계정 정보가 설정되지 않아 건너뜁니다.")
+    if not GARMIN_API_KEY:
+        print("⚠️ GARMIN_API_KEY가 설정되지 않아 건너뜁니다.")
         return
 
-    try:
-        client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
-        client.login()
-        print("✅ 가민 커넥트 로그인 성공")
+    # 가민 개인 API 토큰(GCDC...) 전용 엔드포인트 및 헤더
+    base_url = "https://connectapi.garmin.com"
+    headers = {
+        "Authorization": f"Bearer {GARMIN_API_KEY}",
+        "Accept": "application/json",
+        "User-Agent": "GCM-iOS-5.7.2.1",
+    }
 
-        # ---------------------------------------------------------
-        # 1. 일별 건강 / 회복 / 훈련 부하 지표 (최근 30일)
-        # ---------------------------------------------------------
-        health_list = []
-        for i in range(30):
-            target_date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-            
-            stats = client.get_stats(target_date) or {}
-            hrv = client.get_hrv_data(target_date) or {}
-            sleep = client.get_sleep_data(target_date) or {}
-            training = client.get_training_status(target_date) or {}
-            readiness = client.get_training_readiness(target_date) or []
+    # 1. 연결 테스트 및 최근 사이클링 활동 조회 (최신 30개)
+    act_url = f"{base_url}/activitylist-service/activities/search/activities"
+    act_res = requests.get(act_url, headers=headers, params={"start": 0, "limit": 30})
 
-            hrv_summary = hrv.get("hrvSummary", {}) if isinstance(hrv, dict) else {}
-            sleep_dto = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
-            sleep_scores = sleep_dto.get("sleepScores", {}).get("overall", {}) if isinstance(sleep_dto, dict) else {}
-            
-            # 훈련 상태 및 급성/만성 부하 추출
-            most_recent_status = training.get("mostRecentTrainingStatus", {}) if isinstance(training, dict) else {}
-            latest_status_map = most_recent_status.get("latestTrainingStatusData", {}) if isinstance(most_recent_status, dict) else {}
-            first_device_status = next(iter(latest_status_map.values()), {}) if isinstance(latest_status_map, dict) else {}
-            acute_dto = first_device_status.get("acuteTrainingLoadDTO", {}) if isinstance(first_device_status, dict) else {}
+    if act_res.status_code != 200:
+        print(f"❌ 가민 Personal API 호출 실패 (상태 코드 {act_res.status_code}):", act_res.text[:200])
+        return
 
-            # 훈련 준비도 (당일 첫 번째 기록)
-            readiness_item = readiness[0] if isinstance(readiness, list) and len(readiness) > 0 else {}
+    print("✅ 가민 Personal API 연결 성공!")
+    activities = act_res.json()
+    garmin_act_list = []
+    os.makedirs("fit_files", exist_ok=True)
+    fit_download_count = 0
 
-            health_list.append({
-                "date": target_date,
-                "resting_hr": stats.get("restingHeartRate"),
-                "min_hr": stats.get("minHeartRate"),
-                "max_hr": stats.get("maxHeartRate"),
-                "avg_stress": stats.get("averageStressLevel"),
-                "max_stress": stats.get("maxStressLevel"),
-                "body_battery_high": stats.get("bodyBatteryHighestValue"),
-                "body_battery_low": stats.get("bodyBatteryLowestValue"),
-                "body_battery_charged": stats.get("bodyBatteryChargedValue"),
-                "body_battery_drained": stats.get("bodyBatteryDrainedValue"),
-                "hrv_last_night_avg": hrv_summary.get("lastNightAvg"),
-                "hrv_weekly_avg": hrv_summary.get("weeklyAvg"),
-                "hrv_status": hrv_summary.get("status"),
-                "sleep_score": sleep_scores.get("value"),
-                "sleep_total_hr": round(sleep_dto.get("sleepTimeSeconds", 0) / 3600, 2) if sleep_dto.get("sleepTimeSeconds") else None,
-                "sleep_deep_min": round(sleep_dto.get("deepSleepSeconds", 0) / 60, 1) if sleep_dto.get("deepSleepSeconds") else None,
-                "sleep_light_min": round(sleep_dto.get("lightSleepSeconds", 0) / 60, 1) if sleep_dto.get("lightSleepSeconds") else None,
-                "sleep_rem_min": round(sleep_dto.get("remSleepSeconds", 0) / 60, 1) if sleep_dto.get("remSleepSeconds") else None,
-                "sleep_awake_min": round(sleep_dto.get("awakeSleepSeconds", 0) / 60, 1) if sleep_dto.get("awakeSleepSeconds") else None,
-                "sleep_avg_spo2": sleep_dto.get("averageSpO2Value"),
-                "sleep_avg_respiration": sleep_dto.get("averageRespirationValue"),
-                "training_readiness_score": readiness_item.get("score"),
-                "training_readiness_level": readiness_item.get("level"),
-                "training_status": first_device_status.get("trainingStatusFeedbackPhrase"),
-                "acute_load": acute_dto.get("dailyTrainingLoadAcute"),
-                "chronic_load": acute_dto.get("dailyTrainingLoadChronic"),
-                "acwr_ratio": acute_dto.get("dailyAcuteChronicWorkloadRatio"),
-                "active_kcal": stats.get("activeKilocalories"),
-                "steps": stats.get("totalSteps"),
+    for act in activities:
+        act_type = act.get("activityType", {}).get("typeKey", "")
+        if "cycling" in act_type or "biking" in act_type or "ride" in act_type:
+            act_id = act.get("activityId")
+            start_local = act.get("startTimeLocal", "")
+            date_prefix = start_local[:10] if start_local else "unknown"
+
+            garmin_act_list.append({
+                "activity_id": act_id,
+                "date": start_local,
+                "name": act.get("activityName"),
+                "type": act_type,
+                "distance_km": round(act.get("distance", 0) / 1000, 2),
+                "duration_min": round(act.get("duration", 0) / 60, 1),
+                "elevation_gain_m": act.get("elevationGain"),
+                "avg_power": act.get("avgPower"),
+                "norm_power_NP": act.get("normPower"),
+                "max_power": act.get("maxPower"),
+                "max_20min_power": act.get("max20MinPower"),
+                "training_stress_score_TSS": act.get("trainingStressScore"),
+                "intensity_factor_IF": act.get("intensityFactor"),
+                "avg_hr": act.get("averageHR"),
+                "max_hr": act.get("maxHR"),
+                "avg_cadence": act.get("averageBikingCadenceInRevPerMinute"),
+                "left_right_balance": act.get("leftRightBalance"),
+                "aerobic_training_effect": act.get("aerobicTrainingEffect"),
+                "anaerobic_training_effect": act.get("anaerobicTrainingEffect"),
+                "vo2_max": act.get("vO2MaxValue"),
             })
 
-        df_garmin = pd.DataFrame(health_list)
-        df_garmin.to_csv("garmin_health.csv", index=False, encoding="utf-8-sig")
-        print(f"✅ 가민 건강/회복/부하 데이터 {len(df_garmin)}건 저장 완료.")
-
-        # ---------------------------------------------------------
-        # 2. 가민 사이클링 활동 상세 요약 & 원본 FIT 파일 다운로드
-        # ---------------------------------------------------------
-        activities = client.get_activities(0, 30)  # 최근 30개 활동 조회
-        garmin_act_list = []
-        os.makedirs("fit_files", exist_ok=True)
-        fit_download_count = 0
-
-        for act in activities:
-            act_type = act.get("activityType", {}).get("typeKey", "")
-            if "cycling" in act_type or "biking" in act_type or "ride" in act_type:
-                act_id = act.get("activityId")
-                start_local = act.get("startTimeLocal", "")
-                date_prefix = start_local[:10] if start_local else "unknown"
-
-                garmin_act_list.append({
-                    "activity_id": act_id,
-                    "date": start_local,
-                    "name": act.get("activityName"),
-                    "type": act_type,
-                    "distance_km": round(act.get("distance", 0) / 1000, 2),
-                    "duration_min": round(act.get("duration", 0) / 60, 1),
-                    "elevation_gain_m": act.get("elevationGain"),
-                    "avg_power": act.get("avgPower"),
-                    "norm_power_NP": act.get("normPower"),
-                    "max_power": act.get("maxPower"),
-                    "max_20min_power": act.get("max20MinPower"),
-                    "training_stress_score_TSS": act.get("trainingStressScore"),
-                    "intensity_factor_IF": act.get("intensityFactor"),
-                    "avg_hr": act.get("averageHR"),
-                    "max_hr": act.get("maxHR"),
-                    "avg_cadence": act.get("averageBikingCadenceInRevPerMinute"),
-                    "max_cadence": act.get("maxBikingCadenceInRevPerMinute"),
-                    "left_right_balance": act.get("leftRightBalance"),
-                    "aerobic_training_effect": act.get("aerobicTrainingEffect"),
-                    "anaerobic_training_effect": act.get("anaerobicTrainingEffect"),
-                    "vo2_max": act.get("vO2MaxValue"),
-                    "calories": act.get("calories"),
-                })
-
-                # 최신 5개 사이클링 활동의 원본 FIT 파일 다운로드 및 압축 해제
-                if fit_download_count < 5 and act_id:
+            # 최신 5개 라이딩 원본 FIT 파일 다운로드 및 압축 해제
+            if fit_download_count < 5 and act_id:
+                fit_url = f"{base_url}/download-service/files/activity/{act_id}"
+                fit_res = requests.get(fit_url, headers=headers)
+                if fit_res.status_code == 200:
                     try:
-                        zip_bytes = client.download_activity(
-                            act_id, dl_fmt=client.ActivityDownloadFormat.ORIGINAL
-                        )
-                        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                        with zipfile.ZipFile(io.BytesIO(fit_res.content)) as zf:
                             for member in zf.namelist():
                                 if member.lower().endswith(".fit"):
                                     fit_filename = f"fit_files/{date_prefix}_{act_id}.fit"
@@ -198,19 +138,51 @@ def fetch_garmin_data():
                                         f.write(zf.read(member))
                                     fit_download_count += 1
                                     print(f"📥 원본 FIT 저장 완료: {fit_filename}")
-                    except Exception as fit_err:
-                        print(f"⚠️ FIT 다운로드 실패 (ID {act_id}):", fit_err)
+                    except Exception as e:
+                        print(f"⚠️ FIT 압축 해제 실패 (ID {act_id}):", e)
 
-        df_garmin_acts = pd.DataFrame(garmin_act_list)
-        df_garmin_acts.to_csv("garmin_activities.csv", index=False, encoding="utf-8-sig")
-        print(f"✅ 가민 사이클링 활동 {len(df_garmin_acts)}건 및 원본 FIT {fit_download_count}개 저장 완료.")
+    df_garmin_acts = pd.DataFrame(garmin_act_list)
+    df_garmin_acts.to_csv("garmin_activities.csv", index=False, encoding="utf-8-sig")
+    print(f"✅ 가민 활동 {len(df_garmin_acts)}건 및 원본 FIT {fit_download_count}개 저장 완료.")
 
-    except Exception as e:
-        print("❌ 가민 데이터 수집 실패:", e)
+    # 2. 최근 14일치 일별 건강/회복/HRV 지표 수집
+    health_list = []
+    for i in range(14):
+        target_date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        
+        # 일별 요약(심박, 스트레스, 바디배터리) & HRV 조회
+        daily_res = requests.get(f"{base_url}/usersummary-service/usersummary/daily/{target_date}", headers=headers)
+        hrv_res = requests.get(f"{base_url}/hrv-service/hrv/{target_date}", headers=headers)
+        sleep_res = requests.get(f"{base_url}/wellness-service/wellness/dailySleepData/{target_date}", headers=headers)
+
+        daily = daily_res.json() if daily_res.status_code == 200 else {}
+        hrv = hrv_res.json() if hrv_res.status_code == 200 else {}
+        sleep = sleep_res.json() if sleep_res.status_code == 200 else {}
+
+        hrv_summary = hrv.get("hrvSummary", {}) if isinstance(hrv, dict) else {}
+        sleep_dto = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
+        sleep_scores = sleep_dto.get("sleepScores", {}).get("overall", {}) if isinstance(sleep_dto, dict) else {}
+
+        health_list.append({
+            "date": target_date,
+            "resting_hr": daily.get("restingHeartRate"),
+            "avg_stress": daily.get("averageStressLevel"),
+            "body_battery_high": daily.get("bodyBatteryHighestValue"),
+            "body_battery_low": daily.get("bodyBatteryLowestValue"),
+            "hrv_last_night_avg": hrv_summary.get("lastNightAvg"),
+            "hrv_status": hrv_summary.get("status"),
+            "sleep_score": sleep_scores.get("value"),
+            "sleep_hours": round(sleep_dto.get("sleepTimeSeconds", 0) / 3600, 1) if sleep_dto.get("sleepTimeSeconds") else None,
+            "steps": daily.get("totalSteps"),
+        })
+
+    df_garmin_health = pd.DataFrame(health_list)
+    df_garmin_health.to_csv("garmin_health.csv", index=False, encoding="utf-8-sig")
+    print(f"✅ 가민 건강/HRV 데이터 {len(df_garmin_health)}건 저장 완료.")
 
 
 if __name__ == "__main__":
-    print("🚀 피트니스 전체 데이터 및 FIT 수집을 시작합니다...")
+    print("🚀 피트니스 데이터 및 원본 FIT 수집을 시작합니다...")
     fetch_strava_data()
     fetch_garmin_data()
     print("🎉 모든 작업이 완료되었습니다.")
