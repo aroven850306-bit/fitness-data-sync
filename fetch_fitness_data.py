@@ -16,7 +16,6 @@ def fetch_strava_data():
         print("⚠️ 스트라바 API 키가 모두 설정되지 않아 건너뜁니다.")
         return
 
-    # 1. Access Token 갱신
     auth_url = "https://www.strava.com/oauth/token"
     payload = {
         "client_id": STRAVA_CLIENT_ID,
@@ -31,7 +30,6 @@ def fetch_strava_data():
         print("❌ 스트라바 토큰 발급 실패:", res)
         return
 
-    # 2. 최근 활동 100개 가져오기
     activities_url = "https://www.strava.com/api/v3/athlete/activities"
     headers = {"Authorization": f"Bearer {access_token}"}
     params = {"per_page": 100, "page": 1}
@@ -41,7 +39,6 @@ def fetch_strava_data():
         print("❌ 스트라바 데이터 조회 실패:", activities)
         return
 
-    # 3. 라이딩 데이터 필터링 및 정리
     ride_list = []
     for act in activities:
         if act.get("type") in ["Ride", "VirtualRide"]:
@@ -69,30 +66,47 @@ def fetch_garmin_data():
         print("⚠️ 가민 API 키가 설정되지 않아 건너뜁니다.")
         return
 
-    base_url = "https://apis.garmin.com/wellness-api/rest"
-    headers = {
-        "Authorization": f"Bearer {GARMIN_API_KEY}",
-        "Accept": "application/json",
-    }
-
-    # 최근 14일치 데이터 조회 범위 설정 (Unix Timestamp)
+    # 최근 14일치 데이터 조회 범위 (Unix Timestamp 및 ISO 날짜)
     end_time = int(time.time())
     start_time = int((datetime.now() - timedelta(days=14)).timestamp())
-    params = {
-        "uploadStartTimeInSeconds": start_time,
-        "uploadEndTimeInSeconds": end_time,
-    }
-
-    # 일별 요약 데이터 (Dailies: 안정시 심박, 스트레스 등)
-    dailies_res = requests.get(f"{base_url}/dailies", headers=headers, params=params)
     
-    if dailies_res.status_code != 200:
-        print(f"❌ 가민 API 호출 실패 (상태 코드 {dailies_res.status_code}):", dailies_res.text)
+    # GCDC 키가 지원하는 주요 헤더 및 엔드포인트 조합 테스트
+    endpoints_and_headers = [
+        # 조합 1: Personal API 표준 X-API-Key 헤더 + Wellness Dailies
+        (
+            "https://apis.garmin.com/wellness-api/rest/dailies",
+            {"X-API-Key": GARMIN_API_KEY, "Accept": "application/json"},
+            {"uploadStartTimeInSeconds": start_time, "uploadEndTimeInSeconds": end_time},
+        ),
+        # 조합 2: Personal Data 전용 엔드포인트 + X-API-Key
+        (
+            "https://apis.garmin.com/personal-api/rest/dailies",
+            {"X-API-Key": GARMIN_API_KEY, "Accept": "application/json"},
+            {"uploadStartTimeInSeconds": start_time, "uploadEndTimeInSeconds": end_time},
+        ),
+        # 조합 3: Authorization API-Key 헤더 형식
+        (
+            "https://apis.garmin.com/wellness-api/rest/dailies",
+            {"Authorization": f"API-Key {GARMIN_API_KEY}", "Accept": "application/json"},
+            {"uploadStartTimeInSeconds": start_time, "uploadEndTimeInSeconds": end_time},
+        ),
+    ]
+
+    dailies_data = None
+    for idx, (url, headers, params) in enumerate(endpoints_and_headers, 1):
+        res = requests.get(url, headers=headers, params=params)
+        if res.status_code == 200:
+            print(f"✅ 가민 API 연결 성공 (방식 {idx})")
+            dailies_data = res.json()
+            break
+        else:
+            print(f"⚠️ 가민 방식 {idx} 시도 결과 ({res.status_code}): {res.text[:120]}")
+
+    if dailies_data is None:
+        print("❌ 모든 가민 Personal API 호출 방식이 실패했습니다. 발급 페이지의 샘플 URL/헤더 확인이 필요합니다.")
         return
 
-    dailies_data = dailies_res.json()
     health_list = []
-
     for item in dailies_data:
         health_list.append({
             "calendar_date": item.get("calendarDate"),
