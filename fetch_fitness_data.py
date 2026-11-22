@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Garmin Connect + Strava 데이터 수집 스크립트
-- garminconnect 0.3.x+ (내장 OAuth 토큰 방식) 및 0.2.x 모두 완벽 지원
-- GARMIN_API_KEY (Base64 직렬화 토큰 / JSON 토큰 번들 / 이메일:비밀번호) 및 GARMIN_EMAIL/PASSWORD 지원
+- garminconnect 0.3.x+ (GCDC_0... 토큰 문자열 및 tokenstore 방식) 완벽 지원
+- GARMIN_API_KEY (GCDC_0... 네이티브 토큰 / Base64 / JSON / 이메일:비밀번호) 및 GARMIN_EMAIL/PASSWORD 지원
 - Garmin 활동 전체 누적 수집 및 MyFitnessPal 자동 중복 제거
 - 가민 웰니스 확장: HRV 기준 범위(baseline), 수면 단계/점수, 안정시 심박·스트레스·바디배터리 대체 엔드포인트 보완
 - 활동별 원본 .fit 파일 자동 다운로드 (이미 존재하는 파일은 건너뛰어 누적 유지)
@@ -52,6 +52,10 @@ def decode_garmin_api_key(raw_key: str) -> Tuple[str, str, Optional[str], Option
     if not raw_key:
         return "", "", None, None
 
+    # garminconnect 0.3.x 네이티브 직렬화 토큰 (GCDC_0...)은 그대로 raw_token_str로 반환
+    if raw_key.startswith("GCDC_"):
+        return "", "", None, raw_key
+
     candidates = [raw_key]
     try:
         padded = raw_key + "=" * ((4 - len(raw_key) % 4) % 4)
@@ -62,6 +66,9 @@ def decode_garmin_api_key(raw_key: str) -> Tuple[str, str, Optional[str], Option
         pass
 
     for cand in candidates:
+        if cand.startswith("GCDC_"):
+            return "", "", None, cand
+
         if cand.startswith("{"):
             try:
                 data = json.loads(cand)
@@ -102,7 +109,7 @@ def decode_garmin_api_key(raw_key: str) -> Tuple[str, str, Optional[str], Option
 
 def init_garmin() -> Garmin:
     """
-    garminconnect 0.3.x+ (`Garmin().login(tokenstore)`) 및 0.2.x 모두 지원하는 Garmin 초기화.
+    garminconnect 0.3.x+ (`GCDC_0...` 토큰 형식) 및 0.2.x 모두 지원하는 Garmin 초기화.
     """
     email = os.getenv("GARMIN_EMAIL", "").strip()
     password = os.getenv("GARMIN_PASSWORD", "").strip()
@@ -135,54 +142,46 @@ def init_garmin() -> Garmin:
         except Exception as e:
             print(f"[WARN] GARMIN_API_KEY 토큰 디렉토리 로그인 실패: {e}", flush=True)
 
-    # 3) GARMIN_API_KEY가 단일 문자열인 경우 (garth.dumps() Base64 문자열 또는 단일 토큰)
+    # 3) GARMIN_API_KEY가 garminconnect 0.3.x 네이티브 토큰 문자열(GCDC_0...)인 경우
     if raw_token_str:
-        # 3-a) garth.dumps()로 생성된 Base64 문자열을 디코딩해 oauth1_token.json / oauth2_token.json 으로 복원
+        # 3-a) 파일 경로(os.path.isfile)로 직접 전달 시도
         try:
-            padded = raw_token_str + "=" * ((4 - len(raw_token_str) % 4) % 4)
-            decoded_bytes = base64.b64decode(padded)
-            decoded_text = decoded_bytes.decode("utf-8")
-            parsed = json.loads(decoded_text)
-            if isinstance(parsed, dict):
-                tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_b64_tok_"))
-                if "oauth1_token" in parsed:
-                    (tmp_dir / "oauth1_token.json").write_text(json.dumps(parsed["oauth1_token"]), encoding="utf-8")
-                if "oauth2_token" in parsed:
-                    (tmp_dir / "oauth2_token.json").write_text(json.dumps(parsed["oauth2_token"]), encoding="utf-8")
-                (tmp_dir / "garmin_tokens.json").write_text(decoded_text, encoding="utf-8")
-                c = Garmin()
-                c.login(str(tmp_dir))
-                return c
-            elif isinstance(parsed, list) and len(parsed) >= 2:
-                tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_b64_list_"))
-                (tmp_dir / "oauth1_token.json").write_text(json.dumps(parsed[0]), encoding="utf-8")
-                (tmp_dir / "oauth2_token.json").write_text(json.dumps(parsed[1]), encoding="utf-8")
-                c = Garmin()
-                c.login(str(tmp_dir))
-                return c
-        except Exception as e_b64:
-            print(f"[WARN] Base64 토큰 번들 디코딩 시도 실패: {e_b64}", flush=True)
-
-        # 3-b) c.client.loads(raw_token_str) 직접 호출 (garminconnect 0.3.x 내장 client.loads)
-        try:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_gcdc_"))
+            tok_file = tmp_dir / "garmin_tokens"
+            tok_file.write_text(raw_token_str, encoding="utf-8")
             c = Garmin()
-            if hasattr(c, "client") and hasattr(c.client, "loads"):
-                c.client.loads(raw_token_str)
-                return c
-        except Exception as e_loads:
-            print(f"[WARN] c.client.loads(GARMIN_API_KEY) 실패: {e_loads}", flush=True)
+            c.login(str(tok_file))
+            return c
+        except Exception as e_file1:
+            print(f"[WARN] 토큰 파일(garmin_tokens) 로그인 시도 실패: {e_file1}", flush=True)
 
-        # 3-c) 단일 토큰 문자열을 garmin_tokens.json / oauth2_token.json 에 저장 후 c.login(tmp_dir)
+        # 3-b) 확장자(.json / .txt / .token) 및 디렉토리 내부 파일명 변형 시도
         try:
-            tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_single_tok_"))
-            token_payload = json.dumps({"oauth2_token": raw_token_str, "access_token": raw_token_str})
-            (tmp_dir / "garmin_tokens.json").write_text(token_payload, encoding="utf-8")
-            (tmp_dir / "oauth2_token.json").write_text(token_payload, encoding="utf-8")
+            tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_gcdc_dir_"))
+            for fname in ("garmin_tokens", "garmin_tokens.json", "tokens", "token", "oauth_token", "session"):
+                (tmp_dir / fname).write_text(raw_token_str, encoding="utf-8")
             c = Garmin()
             c.login(str(tmp_dir))
             return c
-        except Exception as e_single:
-            print(f"[WARN] 단일 토큰 JSON 래핑 로그인 실패: {e_single}", flush=True)
+        except Exception as e_dir1:
+            print(f"[WARN] 토큰 디렉토리(GCDC) 로그인 시도 실패: {e_dir1}", flush=True)
+
+        # 3-c) c.client / c.garth 또는 garminconnect 내부 로더 함수 탐색 후 직접 로드
+        try:
+            c = Garmin()
+            for attr_name in ("client", "garth", "session", "auth", "_client"):
+                sub = getattr(c, attr_name, None)
+                if sub is not None:
+                    for m_name in ("loads", "load_tokens", "from_string", "deserialize", "set_token"):
+                        fn = getattr(sub, m_name, None)
+                        if callable(fn):
+                            try:
+                                fn(raw_token_str)
+                                return c
+                            except Exception:
+                                pass
+        except Exception as e_sub:
+            print(f"[WARN] 하위 클라이언트 GCDC 로드 시도 실패: {e_sub}", flush=True)
 
     # 4) 이메일/비밀번호 로그인
     if email and password:
@@ -195,17 +194,15 @@ def init_garmin() -> Garmin:
             c.garth.dump(str(token_path))
         return c
 
-    # 진단용: 현재 설치된 garminconnect의 login 소스 및 GARMIN_API_KEY 형식 진단 (값 자체는 출력하지 않음)
-    key_len = len(raw_key)
-    key_prefix = raw_key[:6] + "..." if key_len >= 6 else "(empty)"
+    # 진단용: Garmin.login 전체 소스(토큰 로딩 부분) 출력
     try:
         login_src = inspect.getsource(Garmin.login)
-        first_lines = " | ".join(line.strip() for line in login_src.splitlines()[:18])
+        lines = [line.strip() for line in login_src.splitlines()[:45]]
+        diag_str = " | ".join(lines)
     except Exception:
-        first_lines = "N/A"
+        diag_str = "N/A"
     raise ValueError(
-        f"GARMIN_API_KEY 인증에 실패했습니다. (key_len={key_len}, prefix={key_prefix}) "
-        f"Garmin.login 내부 로직: {first_lines}"
+        f"GARMIN_API_KEY(GCDC) 인증에 실패했습니다. Garmin.login 상세: {diag_str}"
     )
 
 
