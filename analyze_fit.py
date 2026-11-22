@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-누적 .fit 파일 전체 정밀 분석 스크립트 (전체 업그레이드 버전)
-- 디렉토리 내 과거 .fit 파일 전체(22개 이상) 일괄 분석 및 누적 CSV 생성
+누적 .fit 파일 전체 정밀 분석 스크립트 (루트 경로 & upload_to_gdrive.py 완벽 호환 버전)
+- 기본 디렉토리: ./fit_files/, 출력 파일: ./fit_analysis_report.csv (upload_to_gdrive.py와 정확히 일치)
 - MMP(5초/1분/5분/20분), eFTP, NP, IF, TSS, 파워 존(Z1~Z5) 분포
 - 에어로빅 디커플링(Pw:HR Drift), 효율 지수(EF = NP / Avg HR)
 - 좌우 밸런스(%), 좌우 토크 효율(TE %), 좌우 페달 부드러움(Pedal Smoothness %) 추출
@@ -18,9 +18,10 @@ from fitparse import FitFile
 
 load_dotenv()
 
-DATA_DIR = Path(os.getenv("FITNESS_DATA_DIR", "./fitness_data"))
+# upload_to_gdrive.py의 TARGET_FILES("fit_analysis_report.csv")와 sync_data.yml의 fit_files/ 경로와 일치
+DATA_DIR = Path(os.getenv("FITNESS_DATA_DIR", "."))
 FIT_DIR = DATA_DIR / "fit_files"
-OUTPUT_CSV = DATA_DIR / "fit_analysis_summary.csv"
+OUTPUT_CSV = DATA_DIR / "fit_analysis_report.csv"
 FTP_WATTS = float(os.getenv("FTP_WATTS", "195"))
 
 
@@ -46,7 +47,7 @@ def compute_mmp(power_series: pd.Series, window_sec: int) -> Optional[float]:
 def compute_aerobic_decoupling(df: pd.DataFrame) -> Optional[float]:
     """전반기 대비 후반기 Pw:HR 효율 비율 변화율(Aerobic Decoupling %) 계산"""
     valid = df[(df["power"] > 0) & (df["heart_rate"] > 0)].copy()
-    if len(valid) < 600:  # 최소 10분 이상 유효 데이터 필요
+    if len(valid) < 600:
         return None
 
     mid = len(valid) // 2
@@ -63,10 +64,7 @@ def compute_aerobic_decoupling(df: pd.DataFrame) -> Optional[float]:
 
 
 def parse_left_right_balance(series: pd.Series) -> Optional[float]:
-    """
-    FIT left_right_balance 필드에서 좌측 비율(%) 추출
-    - bit 7(0x80=128)이 세팅된 경우 하위 7비트가 우측 비율이므로 100 - right 로 환산
-    """
+    """FIT left_right_balance 필드에서 좌측 비율(%) 추출"""
     s = series.dropna()
     if s.empty:
         return None
@@ -147,21 +145,18 @@ def analyze_single_fit(fit_path: Path, ftp: float = FTP_WATTS) -> Optional[Dict[
         max_hr = round(float(valid_hr.max()), 1) if not valid_hr.empty else None
         avg_cadence = round(float(valid_cad.mean()), 1) if not valid_cad.empty else None
 
-        # EF (Efficiency Factor = NP / Avg HR)
         efficiency_factor = (
             round(float(np_watts) / float(avg_hr), 2)
             if (np_watts and avg_hr and avg_hr > 0)
             else None
         )
 
-        # MMP 및 20분 파워 기반 eFTP
         mmp_5s = compute_mmp(power, 5)
         mmp_1m = compute_mmp(power, 60)
         mmp_5m = compute_mmp(power, 300)
         mmp_20m = compute_mmp(power, 1200)
         est_ftp = round(mmp_20m * 0.95, 1) if mmp_20m else None
 
-        # 디커플링 및 좌우 밸런스
         decoupling_pct = compute_aerobic_decoupling(df)
         left_bal = (
             parse_left_right_balance(df["left_right_balance"])
@@ -170,7 +165,6 @@ def analyze_single_fit(fit_path: Path, ftp: float = FTP_WATTS) -> Optional[Dict[
         )
         right_bal = round(100.0 - left_bal, 1) if left_bal is not None else None
 
-        # 페달 부드러움(Pedal Smoothness) 및 토크 효율(Torque Effectiveness)
         left_ps = safe_mean(df, "left_pedal_smoothness") or session_info.get("avg_left_pedal_smoothness")
         right_ps = safe_mean(df, "right_pedal_smoothness") or session_info.get("avg_right_pedal_smoothness")
         if left_ps is None and right_ps is None:
@@ -182,7 +176,6 @@ def analyze_single_fit(fit_path: Path, ftp: float = FTP_WATTS) -> Optional[Dict[
         left_te = safe_mean(df, "left_torque_effectiveness") or session_info.get("avg_left_torque_effectiveness")
         right_te = safe_mean(df, "right_torque_effectiveness") or session_info.get("avg_right_torque_effectiveness")
 
-        # 파워 존 분포 (Coggan 5존 기준, 분 단위)
         p_filled = power.fillna(0)
         z1_min = round(float((p_filled < ftp * 0.56).sum()) / 60.0, 1)
         z2_min = round(float(((p_filled >= ftp * 0.56) & (p_filled < ftp * 0.76)).sum()) / 60.0, 1)
@@ -220,7 +213,7 @@ def analyze_single_fit(fit_path: Path, ftp: float = FTP_WATTS) -> Optional[Dict[
             "Z5_vo2max_min": z5_min,
         }
     except Exception as e:
-        print(f"[WARN] FIT 분석 실패 ({fit_path.name}): {e}")
+        print(f"[WARN] FIT 분석 실패 ({fit_path.name}): {e}", flush=True)
         return None
 
 
@@ -228,7 +221,7 @@ def analyze_all_fits() -> pd.DataFrame:
     """FIT_DIR 내 모든 .fit 파일을 최신순으로 일괄 분석하여 CSV 저장"""
     fit_files = sorted(FIT_DIR.glob("*.fit"), key=lambda p: p.name, reverse=True)
     if not fit_files:
-        print(f"[INFO] 분석할 .fit 파일이 없습니다: {FIT_DIR}")
+        print(f"[INFO] 분석할 .fit 파일이 없습니다: {FIT_DIR}", flush=True)
         return pd.DataFrame()
 
     results: List[Dict[str, Any]] = []
@@ -239,7 +232,7 @@ def analyze_all_fits() -> pd.DataFrame:
 
     df_out = pd.DataFrame(results)
     df_out.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-    print(f"[OK] 총 {len(df_out)}개 FIT 파일 분석 완료 -> {OUTPUT_CSV}")
+    print(f"[OK] 총 {len(df_out)}개 FIT 파일 분석 완료 -> {OUTPUT_CSV}", flush=True)
     return df_out
 
 
