@@ -71,7 +71,6 @@ def get_garmin_access_token(api_key):
     token_url = "https://personal.connectapi.garmin.com/personalapitoken-service/personal-api/personal-api-key/token"
     headers = {
         "Authorization": f"ApiKey {api_key}",
-        "Accept": "application/json",
     }
     res = requests.post(token_url, headers=headers)
     print(f"🔍 가민 토큰 발급 응답 코드: {res.status_code}", flush=True)
@@ -79,16 +78,12 @@ def get_garmin_access_token(api_key):
         print("❌ 가민 Access Token 발급 실패 상세:", res.text, flush=True)
         return None
 
-    try:
+    # 순수 문자열(text/plain) 또는 JSON 응답 모두 안전하게 처리
+    raw_text = res.text.strip().strip('"')
+    if raw_text.startswith("{"):
         data = res.json()
-        if isinstance(data, dict):
-            print("🔍 토큰 응답 키:", list(data.keys()), flush=True)
-            return data.get("accessToken") or data.get("access_token") or data.get("token")
-        elif isinstance(data, str):
-            return data.strip()
-    except ValueError:
-        return res.text.strip().strip('"')
-    return None
+        return data.get("accessToken") or data.get("access_token") or data.get("token")
+    return raw_text
 
 
 def fetch_garmin_data():
