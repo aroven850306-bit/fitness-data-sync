@@ -55,6 +55,11 @@ def analyze_all_fit_files(fit_dir="fit_files", current_ftp=220):
                 if col not in df.columns:
                     df[col] = np.nan
 
+            # 문자열('right' 등)이나 결측치가 섞여 있어도 안전하게 숫자로 변환
+            df["power"] = pd.to_numeric(df["power"], errors="coerce")
+            df["heart_rate"] = pd.to_numeric(df["heart_rate"], errors="coerce")
+            df["cadence"] = pd.to_numeric(df["cadence"], errors="coerce")
+
             power = df["power"].fillna(0)
             valid_power = df["power"].dropna()
             valid_hr = df["heart_rate"].dropna()
@@ -71,9 +76,9 @@ def analyze_all_fit_files(fit_dir="fit_files", current_ftp=220):
             z4_threshold_min = round(float(((power > current_ftp * 0.90) & (power <= current_ftp * 1.05)).sum() / 60), 1)
             z5_vo2max_min = round(float((power > current_ftp * 1.05).sum() / 60), 1)
 
-            # 좌우 밸런스 평균 (가민 원본 값의 비트 플래그 보정)
-            lr_raw = df["left_right_balance"].dropna()
-            lr_clean = lr_raw.apply(lambda x: (x & 0x7F) if isinstance(x, int) and x > 100 else x)
+            # 좌우 밸런스 평균 (문자열 'right' 제외 후 비트 플래그 보정)
+            lr_num = pd.to_numeric(df["left_right_balance"], errors="coerce").dropna()
+            lr_clean = lr_num.apply(lambda x: (int(x) & 0x7F) if x > 100 else float(x))
             left_pct = round(float(lr_clean.mean()), 1) if len(lr_clean) > 0 else None
 
             mmp_20m = calculate_mmp(power, 1200)
