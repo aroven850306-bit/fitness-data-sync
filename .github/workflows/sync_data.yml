@@ -2,10 +2,13 @@ name: Sync Garmin and Strava Data
 
 on:
   schedule:
+    # 매일 UTC 14:00 (한국 시간 밤 11:00) 자동 실행
     - cron: '0 14 * * *'
+  # GitHub Actions 탭에서 수동 버튼 클릭으로 즉시 실행 허용
   workflow_dispatch:
 
 permissions:
+  # 저장소에 CSV 및 FIT 파일을 자동 커밋하기 위한 쓰기 권한 부여
   contents: write
 
 jobs:
@@ -14,18 +17,18 @@ jobs:
 
     steps:
       - name: 1. 저장소 코드 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 2. Python 환경 설정
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - name: 3. 필수 라이브러리 설치
+      - name: 3. 필수 라이브러리 설치 (FIT 분석 라이브러리 포함)
         run: |
-          pip install requests pandas
+          pip install requests pandas fitparse numpy
 
-      - name: 4. 가민 및 스트라바 데이터 수집 실행
+      - name: 4. 데이터 수집 및 원본 FIT 정밀 분석 실행
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
@@ -33,6 +36,7 @@ jobs:
           GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
         run: |
           python fetch_fitness_data.py
+          python analyze_fit.py
 
       - name: 5. 업데이트된 CSV 및 FIT 파일 자동 커밋 및 푸시
         run: |
@@ -40,4 +44,4 @@ jobs:
           git config --local user.name "github-actions[bot]"
           mkdir -p fit_files
           git add *.csv fit_files/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update fitness data & FIT files: $(date +'%Y-%m-%d %H:%M')" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update fitness data & FIT analysis: $(date +'%Y-%m-%d %H:%M')" && git push)
