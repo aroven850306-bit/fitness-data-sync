@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Garmin Connect + Strava 데이터 수집 스크립트 (전체 업그레이드 버전)
+Garmin Connect + Strava 데이터 수집 스크립트 (루트 경로 & 기존 시크릿 완벽 호환 버전)
+- 루트 디렉토리(./)에 CSV 및 fit_files/ 저장하여 sync_data.yml 및 upload_to_gdrive.py와 100% 호환
 - Garmin 활동 전체(22개 이상) 누적 수집 및 MyFitnessPal 자동 중복 제거
 - 가민 웰니스 확장: HRV 기준 범위(baseline), 수면 단계/점수, 안정시 심박·스트레스·바디배터리 대체 엔드포인트 보완
 - 활동별 원본 .fit 파일 자동 다운로드 (이미 존재하는 파일은 건너뛰어 누적 유지)
 """
 
+import io
 import os
 import time
 import zipfile
-import io
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,18 +22,19 @@ from garminconnect import Garmin
 
 load_dotenv()
 
-DATA_DIR = Path(os.getenv("FITNESS_DATA_DIR", "./fitness_data"))
+# 기존 sync_data.yml 및 upload_to_gdrive.py와 일치하도록 기본 경로를 루트('.')로 설정
+DATA_DIR = Path(os.getenv("FITNESS_DATA_DIR", "."))
 FIT_DIR = DATA_DIR / "fit_files"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 FIT_DIR.mkdir(parents=True, exist_ok=True)
 
-GARMIN_EMAIL = os.getenv("GARMIN_EMAIL", "")
-GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "")
+GARMIN_EMAIL = os.getenv("GARMIN_EMAIL", "").strip()
+GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "").strip()
 GARMIN_TOKEN_DIR = os.getenv("GARMIN_TOKEN_DIR", str(DATA_DIR / ".garmin_tokens"))
 
-STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "")
-STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "")
-STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "")
+STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "").strip()
+STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "").strip()
+STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "").strip()
 
 FTP_WATTS = float(os.getenv("FTP_WATTS", "195"))
 WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
@@ -56,10 +58,7 @@ def init_garmin() -> Garmin:
 
 
 def is_myfitnesspal_duplicate(row: Dict[str, Any], existing_rows: List[Dict[str, Any]]) -> bool:
-    """
-    MyFitnessPal 연동으로 생성된 수동 중복 칼로리/운동 기록 필터링
-    예: 'Bicycling, 12-14 mph, moderate ... - MyFitnessPal' 등 파워/심박이 비어 있고 시간대가 겹치는 기록 제거
-    """
+    """MyFitnessPal 연동으로 생성된 수동 중복 칼로리/운동 기록 필터링"""
     name = str(row.get("name", "")).lower()
     if "myfitnesspal" in name:
         return True
@@ -115,7 +114,7 @@ def download_fit_file(client: Garmin, activity_id: int, start_local: str) -> Opt
             target_path.write_bytes(raw_bytes)
         return target_path
     except Exception as e:
-        print(f"[WARN] FIT 다운로드 실패 (activity_id={activity_id}): {e}")
+        print(f"[WARN] FIT 다운로드 실패 (activity_id={activity_id}): {e}", flush=True)
         return None
 
 
@@ -127,7 +126,6 @@ def fetch_garmin_activities(client: Garmin, limit: int = ACTIVITY_LIMIT) -> pd.D
     raw_activities = client.get_activities(0, limit)
     cleaned_rows: List[Dict[str, Any]] = []
 
-    # 먼저 센서 데이터가 있는 실제 활동부터 정리
     sorted_raw = sorted(
         raw_activities,
         key=lambda x: (
@@ -178,7 +176,7 @@ def fetch_garmin_activities(client: Garmin, limit: int = ACTIVITY_LIMIT) -> pd.D
         }
 
         if is_myfitnesspal_duplicate(row, cleaned_rows):
-            print(f"[INFO] MyFitnessPal 중복 활동 제외: {act_id} ({row['name']})")
+            print(f"[INFO] MyFitnessPal 중복 활동 제외: {act_id} ({row['name']})", flush=True)
             continue
 
         cleaned_rows.append(row)
@@ -202,9 +200,7 @@ def fetch_garmin_activities(client: Garmin, limit: int = ACTIVITY_LIMIT) -> pd.D
 
 
 def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFrame:
-    """
-    가민 웰니스(HRV 기준 범위 + 수면/안정심박/스트레스/바디배터리 다중 엔드포인트 대체 경로) 수집
-    """
+    """가민 웰니스(HRV 기준 범위 + 수면/안정심박/스트레스/바디배터리 다중 엔드포인트 대체 경로) 수집"""
     csv_path = DATA_DIR / "garmin_health.csv"
     existing_df = pd.read_csv(csv_path) if csv_path.exists() else pd.DataFrame()
 
@@ -226,7 +222,6 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         sleep_hours = None
         steps = None
 
-        # 1) 기본 일일 요약 (get_stats)
         try:
             stats = client.get_stats(d_str) or {}
             resting_hr = stats.get("restingHeartRate")
@@ -237,7 +232,6 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         except Exception:
             pass
 
-        # 2) 안정시 심박 대체 경로 (get_rhr_day / get_heart_rates)
         if resting_hr is None:
             try:
                 rhr_data = client.get_rhr_day(d_str) or {}
@@ -254,7 +248,6 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             except Exception:
                 pass
 
-        # 3) 바디배터리 및 스트레스 대체 경로 (get_body_battery / get_stress_data)
         if bb_high is None or bb_low is None:
             try:
                 bb_list = client.get_body_battery(d_str, d_str) or []
@@ -278,7 +271,6 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             except Exception:
                 pass
 
-        # 4) HRV 및 개인 기준 범위(baseline) 수집
         try:
             hrv_data = client.get_hrv_data(d_str) or {}
             hrv_summary = hrv_data.get("hrvSummary") or {}
@@ -290,7 +282,6 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         except Exception:
             pass
 
-        # 5) 수면 데이터 및 대체 경로 (get_sleep_data)
         try:
             sleep_data = client.get_sleep_data(d_str) or {}
             daily_sleep = sleep_data.get("dailySleepDTO") or {}
@@ -336,7 +327,7 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
 def fetch_strava_activities(per_page: int = 100) -> pd.DataFrame:
     """Strava API에서 활동 이력 수집 및 누적 저장"""
     if not (STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET and STRAVA_REFRESH_TOKEN):
-        print("[INFO] Strava 환경변수가 설정되지 않아 Strava 수집을 건너뜁니다.")
+        print("[INFO] Strava 환경변수가 설정되지 않아 Strava 수집을 건너뜁니다.", flush=True)
         return pd.DataFrame()
 
     csv_path = DATA_DIR / "strava_activities.csv"
@@ -404,21 +395,21 @@ def fetch_strava_activities(per_page: int = 100) -> pd.DataFrame:
 
 
 def main() -> None:
-    print("=== Fitness 데이터 수집 시작 ===")
+    print("=== Fitness 데이터 수집 시작 ===", flush=True)
     garmin_client = init_garmin()
 
     act_df = fetch_garmin_activities(garmin_client, limit=ACTIVITY_LIMIT)
     fit_count = len(list(FIT_DIR.glob("*.fit")))
-    print(f"[OK] Garmin 활동: {len(act_df)}건 / 누적 FIT 파일: {fit_count}개")
+    print(f"[OK] Garmin 활동: {len(act_df)}건 / 누적 FIT 파일: {fit_count}개", flush=True)
 
     health_df = fetch_garmin_health(garmin_client, days=WELLNESS_DAYS)
-    print(f"[OK] Garmin 웰니스: {len(health_df)}일치 저장 완료")
+    print(f"[OK] Garmin 웰니스: {len(health_df)}일치 저장 완료", flush=True)
 
     strava_df = fetch_strava_activities(per_page=100)
     if not strava_df.empty:
-        print(f"[OK] Strava 활동: {len(strava_df)}건 저장 완료")
+        print(f"[OK] Strava 활동: {len(strava_df)}건 저장 완료", flush=True)
 
-    print("=== 수집 완료 ===")
+    print("=== 수집 완료 ===", flush=True)
 
 
 if __name__ == "__main__":
