@@ -2,13 +2,10 @@ name: Sync Garmin and Strava Data
 
 on:
   schedule:
-    # 매일 UTC 14:00 (한국 시간 밤 11:00) 자동 실행
     - cron: '0 14 * * *'
-  # GitHub Actions 탭에서 수동 버튼 클릭으로 즉시 실행 허용
   workflow_dispatch:
 
 permissions:
-  # 저장소에 CSV 및 FIT 파일을 자동 커밋하기 위한 쓰기 권한 부여
   contents: write
 
 jobs:
@@ -26,15 +23,14 @@ jobs:
 
       - name: 3. 필수 라이브러리 설치
         run: |
-          pip install requests pandas garminconnect
+          pip install requests pandas
 
       - name: 4. 가민 및 스트라바 데이터 수집 실행
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
           STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
-          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
-          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
         run: |
           python fetch_fitness_data.py
 
