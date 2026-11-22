@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  # 저장소에 CSV 파일을 자동 커밋하기 위한 쓰기 권한 부여
+  # 저장소에 CSV 및 FIT 파일을 자동 커밋하기 위한 쓰기 권한 부여
   contents: write
 
 jobs:
@@ -26,20 +26,22 @@ jobs:
 
       - name: 3. 필수 라이브러리 설치
         run: |
-          pip install requests pandas
+          pip install requests pandas garminconnect
 
       - name: 4. 가민 및 스트라바 데이터 수집 실행
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
           STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
-          GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
         run: |
           python fetch_fitness_data.py
 
-     - name: 5. 업데이트된 CSV 및 FIT 파일 자동 커밋 및 푸시
+      - name: 5. 업데이트된 CSV 및 FIT 파일 자동 커밋 및 푸시
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          mkdir -p fit_files
           git add *.csv fit_files/
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update fitness data & FIT files: $(date +'%Y-%m-%d %H:%M')" && git push)
