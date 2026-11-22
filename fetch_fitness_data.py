@@ -6,10 +6,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # GitHub Secrets에서 환경 변수 불러오기
-STRAVA_CLIENT_ID = os.environ.get("STRAVA_CLIENT_ID")
-STRAVA_CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET")
-STRAVA_REFRESH_TOKEN = os.environ.get("STRAVA_REFRESH_TOKEN")
-GARMIN_API_KEY = os.environ.get("GARMIN_API_KEY")
+STRAVA_CLIENT_ID = (os.environ.get("STRAVA_CLIENT_ID") or "").strip()
+STRAVA_CLIENT_SECRET = (os.environ.get("STRAVA_CLIENT_SECRET") or "").strip()
+STRAVA_REFRESH_TOKEN = (os.environ.get("STRAVA_REFRESH_TOKEN") or "").strip()
+GARMIN_API_KEY = (os.environ.get("GARMIN_API_KEY") or "").strip()
 
 
 def fetch_strava_data():
