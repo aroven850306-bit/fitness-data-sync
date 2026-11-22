@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  # 저장소에 CSV 및 FIT 파일을 자동 커밋하기 위한 쓰기 권한 부여
   contents: write
 
 jobs:
@@ -24,19 +23,22 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 3. 필수 라이브러리 설치 (FIT 분석 라이브러리 포함)
+      - name: 3. 필수 라이브러리 설치 (FIT 분석 및 Google Drive API 포함)
         run: |
-          pip install requests pandas fitparse numpy
+          pip install requests pandas fitparse numpy google-api-python-client google-auth
 
-      - name: 4. 데이터 수집 및 원본 FIT 정밀 분석 실행
+      - name: 4. 데이터 수집, FIT 정밀 분석 및 Google Drive 업로드 실행
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
           STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
           GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
           python fetch_fitness_data.py
           python analyze_fit.py
+          python upload_to_gdrive.py
 
       - name: 5. 업데이트된 CSV 및 FIT 파일 자동 커밋 및 푸시
         run: |
@@ -44,4 +46,4 @@ jobs:
           git config --local user.name "github-actions[bot]"
           mkdir -p fit_files
           git add *.csv fit_files/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update fitness data & FIT analysis: $(date +'%Y-%m-%d %H:%M')" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update fitness data, FIT analysis & GDrive sync: $(date +'%Y-%m-%d %H:%M')" && git push)
