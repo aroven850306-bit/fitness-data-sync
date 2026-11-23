@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Garmin Connect + Strava 데이터 수집 스크립트 (Training Readiness & Training Load/ACWR 보완 버전)
+Garmin Connect + Strava 데이터 수집 스크립트
 - 루트 디렉토리(./)에 CSV 및 fit_files/ 저장
-- Garmin 활동 누적 수집 + MyFitnessPal 자동 중복 제거 + 원본 .fit 파일 누적 다운로드
-- 가민 웰니스: 기존 수면/HRV/바디배터리/심박/스트레스 + Training Readiness / Acute Load / Chronic Load / ACWR 수집
-- 기존 CSV의 값이 있을 때 새 값이 None이어도 덮어써서 누락되지 않도록 안전 병합
+- Garmin 세션 토큰(JSON/파일/디렉토리) 우선 복원 + 이메일/비밀번호 로그인 fallback (429 회피 지원)
+- 가민 웰니스 + Training Readiness / Training Load / ACWR 수집
+- 기존 CSV의 유효 값 보존 안전 병합
 """
 
 import io
+import json
 import os
+import tempfile
 import time
 import zipfile
 from datetime import datetime, timedelta
@@ -29,7 +31,9 @@ FIT_DIR.mkdir(parents=True, exist_ok=True)
 
 GARMIN_EMAIL = os.getenv("GARMIN_EMAIL", "").strip()
 GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "").strip()
-GARMIN_TOKEN_DIR = os.getenv("GARMIN_TOKEN_DIR", str(DATA_DIR / ".garmin_tokens"))
+GARMIN_TOKEN_DIR = os.getenv("GARMIN_TOKEN_DIR", str(DATA_DIR / ".garmin_tokens")).strip()
+GARMIN_TOKEN = os.getenv("GARMIN_TOKEN", "").strip()
+GARMIN_API_KEY = os.getenv("GARMIN_API_KEY", "").strip()
 
 STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "").strip()
 STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "").strip()
@@ -116,20 +120,78 @@ def _merge_prefer_non_null(existing_df: pd.DataFrame, new_df: pd.DataFrame, key_
     return pd.DataFrame(list(ex_map.values()), columns=all_cols)
 
 
+def _save_token_store(client: Garmin, target_dir: Path) -> None:
+    """버전 차이를 고려해 토큰 스토어를 안전하게 저장"""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if hasattr(client, "client") and hasattr(client.client, "dump"):
+        client.client.dump(str(target_dir))
+    elif hasattr(client, "garth") and hasattr(client.garth, "dump"):
+        client.garth.dump(str(target_dir))
+
+
 def init_garmin() -> Garmin:
-    """토큰 캐시를 우선 사용하여 Garmin Connect 클라이언트 초기화"""
-    client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
-    token_path = Path(GARMIN_TOKEN_DIR)
-    if token_path.exists():
+    """저장된 세션 토큰(JSON/디렉토리)을 우선 사용하고, 필요 시 이메일/비밀번호로 로그인"""
+    token_candidates = [v for v in (GARMIN_TOKEN, GARMIN_API_KEY) if v]
+
+    # 1. JSON 세션 토큰 문자열(GARMIN_TOKEN 또는 GARMIN_API_KEY)이 있는 경우 우선 시도
+    for raw_tok in token_candidates:
         try:
-            client.login(str(token_path))
-            return client
+            parsed = json.loads(raw_tok)
+            if isinstance(parsed, dict) and ("di_token" in parsed or "oauth2_token" in parsed):
+                tmp_dir = Path(tempfile.mkdtemp(prefix="garmin_tok_"))
+                (tmp_dir / "garmin_tokens.json").write_text(
+                    json.dumps(parsed), encoding="utf-8"
+                )
+                client = Garmin()
+                client.login(str(tmp_dir))
+                _save_token_store(client, Path(GARMIN_TOKEN_DIR))
+                print("[OK] 세션 토큰으로 Garmin 로그인 성공", flush=True)
+                return client
         except Exception:
             pass
-    client.login()
-    token_path.mkdir(parents=True, exist_ok=True)
-    client.garth.dump(str(token_path))
-    return client
+
+    # 2. 로컬 토큰 디렉토리/파일 캐시 시도
+    if GARMIN_TOKEN_DIR:
+        tok_path = Path(GARMIN_TOKEN_DIR)
+        if tok_path.exists():
+            try:
+                client = Garmin()
+                client.login(str(tok_path))
+                _save_token_store(client, tok_path)
+                print("[OK] 캐시된 토큰 스토어로 Garmin 로그인 성공", flush=True)
+                return client
+            except Exception as e:
+                print(f"[WARN] 캐시 토큰 로그인 실패: {e}", flush=True)
+
+    # 3. 이메일/비밀번호 로그인 fallback (429 발생 시 대기 후 재시도)
+    if not (GARMIN_EMAIL and GARMIN_PASSWORD):
+        raise RuntimeError(
+            "Garmin 인증 정보가 없습니다. 유효한 JSON 세션 토큰(GARMIN_TOKEN/GARMIN_API_KEY) 또는 "
+            "GARMIN_EMAIL / GARMIN_PASSWORD를 설정해 주세요."
+        )
+
+    last_err: Optional[Exception] = None
+    for attempt in range(1, 4):
+        try:
+            client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
+            client.login()
+            _save_token_store(client, Path(GARMIN_TOKEN_DIR))
+            print("[OK] 이메일/비밀번호로 Garmin 로그인 성공", flush=True)
+            return client
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            if "429" in msg or "rate limit" in msg.lower():
+                wait_sec = attempt * 15
+                print(
+                    f"[WARN] Garmin 429 Rate Limit 감지 (시도 {attempt}/3) — {wait_sec}초 대기 후 재시도...",
+                    flush=True,
+                )
+                time.sleep(wait_sec)
+            else:
+                break
+
+    raise RuntimeError(f"Garmin 로그인 실패: {last_err}") from last_err
 
 
 def is_myfitnesspal_duplicate(row: Dict[str, Any], existing_rows: List[Dict[str, Any]]) -> bool:
@@ -284,7 +346,6 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
         "acwr": None,
     }
 
-    # 1. Training Readiness
     try:
         readiness_raw = client.get_training_readiness(d_str)
         if readiness_raw:
@@ -302,7 +363,6 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 2. Training Status / Acute Load / Chronic Load / ACWR
     try:
         status_raw = client.get_training_status(d_str)
         if status_raw:
