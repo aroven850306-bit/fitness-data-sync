@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Garmin Connect + Strava 데이터 수집 스크립트 (체성분 제외 + 1초 단위 파워/케이던스/심박 분석)
+Garmin Connect + Strava 데이터 수집 스크립트 (전체 통합판)
 - 체성분(체중/체지방/골격근량/BMI) 수집 제외
-- 1초 단위 파워(W) · 케이던스(rpm) · 심박(bpm) 정밀 분석 지원
-- 기존 수집 항목 캐싱으로 반복 실행 시 계산 시간 최소화
-- 선택적 1초 시계열 압축(.json.gz) 저장 지원(용량/속도 안내 포함)
+- Garmin 활동 누적 수집 + MyFitnessPal 자동 중복 제거 + 원본 .fit 파일 누적 보관
+- Garmin 웰니스: 수면 단계(깊은잠/REM/얕은잠/깨어있음)·호흡수·SpO2, 트레이닝 레디니스·상태·단기/만성부하·ACWR
+- 1초 단위 파워(W) · 케이던스(rpm) · 심박(bpm) 정밀 분석 (`garmin_fit_extended.csv`)
+- SAVE_1S_STREAM_GZ=true 일 때 가장 최근 .fit 파일 1건만 `streams_1s_gz/latest_stream_1s.json.gz`로 덮어쓰기 저장
+- Strava 활동 목록 + `/activities/{id}` 상세 + `/activities/{id}/streams` 1초 스트림 요약 수집
 """
 
 import base64
@@ -29,6 +31,8 @@ load_dotenv()
 DATA_DIR = Path(os.getenv("FITNESS_DATA_DIR", "."))
 FIT_DIR = DATA_DIR / "fit_files"
 STREAM_1S_DIR = DATA_DIR / "streams_1s_gz"
+FIT_EXTENDED_CSV = DATA_DIR / "garmin_fit_extended.csv"
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 FIT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -44,7 +48,7 @@ WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
 ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
 STRAVA_DETAIL_LIMIT = int(os.getenv("STRAVA_DETAIL_LIMIT", "25"))
 STRAVA_STREAM_LIMIT = int(os.getenv("STRAVA_STREAM_LIMIT", "15"))
-SAVE_1S_STREAM_GZ = os.getenv("SAVE_1S_STREAM_GZ", "false").strip().lower() in ("1", "true", "yes")
+SAVE_1S_STREAM_GZ = os.getenv("SAVE_1S_STREAM_GZ", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def safe_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -507,29 +511,50 @@ def resample_to_1s(df: pd.DataFrame) -> pd.DataFrame:
             sub["_ts"] = ts.loc[valid]
             sub = sub.sort_values("_ts").drop_duplicates(subset=["_ts"], keep="last").set_index("_ts")
             full_idx = pd.date_range(sub.index.min(), sub.index.max(), freq="1s")
-            # 너무 긴 휴지/비정상 타임스탬프 폭주 방지 (최대 12시간)
             if len(full_idx) <= 43200:
                 reindexed = sub.reindex(full_idx)
-                for col in ("power", "heart_rate", "cadence", "left_right_balance", "left_pedal_smoothness", "right_pedal_smoothness", "left_torque_effectiveness", "right_torque_effectiveness"):
+                for col in (
+                    "power",
+                    "heart_rate",
+                    "cadence",
+                    "left_right_balance",
+                    "left_pedal_smoothness",
+                    "right_pedal_smoothness",
+                    "left_torque_effectiveness",
+                    "right_torque_effectiveness",
+                ):
                     if col in reindexed.columns:
                         reindexed[col] = pd.to_numeric(reindexed[col], errors="coerce")
                 return reindexed.reset_index().rename(columns={"index": "timestamp"})
 
     out = df.copy()
-    for col in ("power", "heart_rate", "cadence", "left_right_balance", "left_pedal_smoothness", "right_pedal_smoothness", "left_torque_effectiveness", "right_torque_effectiveness"):
+    for col in (
+        "power",
+        "heart_rate",
+        "cadence",
+        "left_right_balance",
+        "left_pedal_smoothness",
+        "right_pedal_smoothness",
+        "left_torque_effectiveness",
+        "right_torque_effectiveness",
+    ):
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
 
 
-def parse_fit_1s_extended(fit_path: Path) -> Optional[Dict[str, Any]]:
+def parse_fit_1s_extended(
+    fit_path: Path,
+    overwrite_latest_gz: bool = False,
+    prev_stream_gz_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     .fit 파일을 1초 단위로 세분화 분석:
     - 파워(1s): 평균, 표준편차, 최대(1s), 0W 코스팅 비율, 1초 롤링 MMP (5s/10s/30s/1m/2m/5m/10m/20m/60m), 추정 FTP(20m * 0.95)
     - 케이던스(1s): 평균, 표준편차, 최대(1s), 페달링(cadence > 0) 비율, 페달링 중 평균 케이던스
     - 심박(1s): 평균, 표준편차, 최소/최대(1s), 1초 기준 전반/후반 효율(EF_1s) 및 유산소 디커플링
     - 파워 존(Z1~Z5) 및 심박 존(HR_Z1~HR_Z5) 1초 기준 체류 시간(분)
-    - 선택 시 1초 파워/케이던스/심박 시계열을 .json.gz로 저장
+    - overwrite_latest_gz=True 인 경우 `streams_1s_gz/latest_stream_1s.json.gz`로 덮어쓰기 저장
     """
     try:
         from fitparse import FitFile
@@ -556,7 +581,7 @@ def parse_fit_1s_extended(fit_path: Path) -> Optional[Dict[str, Any]]:
         hr_series = df_1s["heart_rate"] if "heart_rate" in df_1s else pd.Series(dtype=float)
         cad_series = df_1s["cadence"] if "cadence" in df_1s else pd.Series(dtype=float)
 
-        # 파워 1초 분석 (결측은 0W로 코스팅 반영 시 활용, 평균/MMP는 유효 샘플 기준)
+        # 파워 1초 분석
         p_valid = p_series.dropna().to_numpy(dtype=float)
         p_zero_fill = p_series.fillna(0.0).to_numpy(dtype=float)
 
@@ -573,7 +598,11 @@ def parse_fit_1s_extended(fit_path: Path) -> Optional[Dict[str, Any]]:
         elif len(p_valid) > 0:
             np_watts_1s = avg_power_1s
 
-        vi_1s = round(float(np_watts_1s) / float(avg_power_1s), 3) if (np_watts_1s and avg_power_1s and avg_power_1s > 0) else None
+        vi_1s = (
+            round(float(np_watts_1s) / float(avg_power_1s), 3)
+            if (np_watts_1s and avg_power_1s and avg_power_1s > 0)
+            else None
+        )
 
         mmp_5s = rolling_max_1s(p_zero_fill, 5)
         mmp_10s = rolling_max_1s(p_zero_fill, 10)
@@ -602,15 +631,21 @@ def parse_fit_1s_extended(fit_path: Path) -> Optional[Dict[str, Any]]:
         min_hr_1s = round(float(np.min(hr_valid)), 1) if len(hr_valid) else None
         max_hr_1s = round(float(np.max(hr_valid)), 1) if len(hr_valid) else None
 
-        ef_1s = round(float(np_watts_1s) / float(avg_hr_1s), 3) if (np_watts_1s and avg_hr_1s and avg_hr_1s > 0) else None
+        ef_1s = (
+            round(float(np_watts_1s) / float(avg_hr_1s), 3)
+            if (np_watts_1s and avg_hr_1s and avg_hr_1s > 0)
+            else None
+        )
 
         # 1초 정렬 기준 전반/후반 효율 & 유산소 디커플링
         ef_1st = ef_2nd = ef_delta_pct = decoupling_pct = None
         if "power" in df_1s and "heart_rate" in df_1s:
-            paired = pd.DataFrame({
-                "p": df_1s["power"].fillna(0.0),
-                "hr": df_1s["heart_rate"],
-            }).dropna()
+            paired = pd.DataFrame(
+                {
+                    "p": df_1s["power"].fillna(0.0),
+                    "hr": df_1s["heart_rate"],
+                }
+            ).dropna()
             if len(paired) >= 120:
                 mid = len(paired) // 2
                 p1, h1 = paired["p"].iloc[:mid].to_numpy(), paired["hr"].iloc[:mid].to_numpy()
@@ -656,20 +691,23 @@ def parse_fit_1s_extended(fit_path: Path) -> Optional[Dict[str, Any]]:
             hr_z4_min = round(float(np.sum((pct_hr >= 0.80) & (pct_hr < 0.90))) / 60.0, 1)
             hr_z5_min = round(float(np.sum(pct_hr >= 0.90)) / 60.0, 1)
 
-        stream_gz_file: Optional[str] = None
-        if SAVE_1S_STREAM_GZ:
+        # 가장 최근 .fit 파일 1건만 고정 파일명(latest_stream_1s.json.gz)으로 덮어쓰기 저장
+        stream_gz_file: Optional[str] = prev_stream_gz_name
+        if overwrite_latest_gz and samples_1s > 0:
             STREAM_1S_DIR.mkdir(parents=True, exist_ok=True)
-            gz_path = STREAM_1S_DIR / f"{fit_path.stem}_1s.json.gz"
+            latest_gz_path = STREAM_1S_DIR / "latest_stream_1s.json.gz"
             payload = {
-                "file": fit_path.name,
+                "source_fit_file": fit_path.name,
+                "samples_1s": samples_1s,
                 "sec_idx": list(range(samples_1s)),
                 "power_1s": [None if np.isnan(x) else round(float(x), 1) for x in p_series.to_numpy(dtype=float)],
                 "cadence_1s": [None if np.isnan(x) else round(float(x), 1) for x in cad_series.to_numpy(dtype=float)],
                 "hr_1s": [None if np.isnan(x) else round(float(x), 1) for x in hr_series.to_numpy(dtype=float)],
             }
-            with gzip.open(gz_path, "wt", encoding="utf-8") as gf:
+            with gzip.open(latest_gz_path, "wt", encoding="utf-8") as gf:
                 json.dump(payload, gf, separators=(",", ":"))
-            stream_gz_file = gz_path.name
+            stream_gz_file = latest_gz_path.name
+            print(f"[OK] 최신 1초 스트림 덮어쓰기 저장 완료: {latest_gz_path} ({fit_path.name})", flush=True)
 
         return {
             "file": fit_path.name,
@@ -726,22 +764,39 @@ def parse_fit_1s_extended(fit_path: Path) -> Optional[Dict[str, Any]]:
 
 
 def sync_fit_extended() -> pd.DataFrame:
-    """fit_files 폴더 내 누적 .fit 파일을 1초 단위로 파싱하여 garmin_fit_extended.csv로 저장"""
-    out_path = DATA_DIR / "garmin_fit_extended.csv"
-    existing_df = pd.read_csv(out_path) if out_path.exists() else pd.DataFrame()
+    """
+    fit_files 폴더 내 누적 .fit 파일을 1초 단위로 파싱하여 garmin_fit_extended.csv로 저장.
+    SAVE_1S_STREAM_GZ=True 일 때는 가장 최근 .fit 파일(idx == 0) 1건만
+    `streams_1s_gz/latest_stream_1s.json.gz`로 덮어쓰기 저장합니다.
+    """
+    existing_df = pd.read_csv(FIT_EXTENDED_CSV) if FIT_EXTENDED_CSV.exists() else pd.DataFrame()
     existing_files = (
         set(existing_df["file"].astype(str))
         if not existing_df.empty and "file" in existing_df.columns
         else set()
     )
 
-    fit_files = sorted(FIT_DIR.glob("*.fit"), reverse=True)
+    fit_files = sorted(FIT_DIR.glob("*.fit"), key=lambda p: p.name, reverse=True)
     new_rows: List[Dict[str, Any]] = []
 
-    for fp in fit_files:
-        if fp.name in existing_files:
+    for idx, fp in enumerate(fit_files):
+        is_latest_fit = idx == 0
+        should_overwrite_latest_gz = bool(SAVE_1S_STREAM_GZ and is_latest_fit)
+
+        if fp.name in existing_files and not should_overwrite_latest_gz:
             continue
-        parsed = parse_fit_1s_extended(fp)
+
+        prev_gz_name: Optional[str] = None
+        if fp.name in existing_files and "stream_1s_gz" in existing_df.columns:
+            prev_vals = existing_df.loc[existing_df["file"].astype(str) == fp.name, "stream_1s_gz"].dropna()
+            if not prev_vals.empty:
+                prev_gz_name = str(prev_vals.iloc[-1])
+
+        parsed = parse_fit_1s_extended(
+            fp,
+            overwrite_latest_gz=should_overwrite_latest_gz,
+            prev_stream_gz_name=prev_gz_name,
+        )
         if parsed:
             new_rows.append(parsed)
 
@@ -755,7 +810,7 @@ def sync_fit_extended() -> pd.DataFrame:
 
     if not combined.empty and "file" in combined.columns:
         combined = combined.sort_values("file", ascending=False).reset_index(drop=True)
-        combined.to_csv(out_path, index=False, encoding="utf-8-sig")
+        combined.to_csv(FIT_EXTENDED_CSV, index=False, encoding="utf-8-sig")
 
     return combined
 
@@ -981,7 +1036,7 @@ def fetch_strava_activities(
 
 
 def main() -> None:
-    print("=== Fitness 데이터 수집 시작 (체성분 제외 / 1초 스트림 분석) ===", flush=True)
+    print("=== Fitness 데이터 수집 시작 (체성분 제외 / 직전 FIT 1초 스트림 덮어쓰기 지원) ===", flush=True)
     garmin_client = init_garmin()
 
     act_df = fetch_garmin_activities(garmin_client, limit=ACTIVITY_LIMIT)
