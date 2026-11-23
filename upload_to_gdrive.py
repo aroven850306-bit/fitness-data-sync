@@ -20,6 +20,10 @@ SHEET_TARGETS = [
     ("strava_activities.csv", "strava_activities"),
 ]
 
+TEXT_OVERWRITE_TARGETS = [
+    ("latest_ride_1s_summary.txt", "latest_ride_1s_summary.txt", "text/plain"),
+]
+
 
 def extract_folder_id(raw_value: str) -> str:
     """전체 URL이 입력되었더라도 순수 Google Drive 폴더 ID만 안전하게 추출"""
@@ -94,10 +98,10 @@ def upsert_sheet(service, folder_id: str, rel_csv_path: str, sheet_title: str) -
         print(f"📤 Google 스프레드시트 신규 생성 완료: {sheet_title} ({local_path})", flush=True)
 
 
-def upsert_binary_file(service, folder_id: str, rel_path: str, drive_name: str, mime_type: str) -> None:
+def upsert_text_file(service, folder_id: str, rel_path: str, drive_name: str, mime_type: str) -> None:
     local_path = resolve_local_file(rel_path)
     if local_path is None:
-        print(f"⚠️ 로컬 파일이 없어 건너뜁니다: {rel_path} (SAVE_1S_STREAM_GZ=true 실행 여부 확인)", flush=True)
+        print(f"⚠️ 로컬 파일이 없어 건너뜁니다: {rel_path}", flush=True)
         return
 
     query = f"name = '{drive_name}' and '{folder_id}' in parents and trashed = false"
@@ -121,7 +125,7 @@ def upsert_binary_file(service, folder_id: str, rel_path: str, drive_name: str, 
             media_body=media,
             supportsAllDrives=True,
         ).execute()
-        print(f"🔄 Google Drive 파일 덮어쓰기 완료: {drive_name} ({local_path})", flush=True)
+        print(f"🔄 Google Drive 텍스트 덮어쓰기 완료: {drive_name} ({local_path})", flush=True)
     else:
         file_metadata = {
             "name": drive_name,
@@ -133,7 +137,7 @@ def upsert_binary_file(service, folder_id: str, rel_path: str, drive_name: str, 
             fields="id",
             supportsAllDrives=True,
         ).execute()
-        print(f"📤 Google Drive 파일 신규 생성 완료: {drive_name} ({local_path})", flush=True)
+        print(f"📤 Google Drive 텍스트 생성 완료: {drive_name} ({local_path})", flush=True)
 
 
 def upload_files_to_drive() -> None:
@@ -160,16 +164,11 @@ def upload_files_to_drive() -> None:
         except Exception as e:
             print(f"❌ 시트 업로드 오류 ({rel_csv_path}): {e}", flush=True)
 
-    try:
-        upsert_binary_file(
-            service,
-            folder_id,
-            "streams_1s_gz/latest_stream_1s.json.gz",
-            "latest_stream_1s.json.gz",
-            "application/gzip",
-        )
-    except Exception as e:
-        print(f"❌ 파일 업로드 오류 (streams_1s_gz/latest_stream_1s.json.gz): {e}", flush=True)
+    for rel_txt_path, drive_name, mime_type in TEXT_OVERWRITE_TARGETS:
+        try:
+            upsert_text_file(service, folder_id, rel_txt_path, drive_name, mime_type)
+        except Exception as e:
+            print(f"❌ 텍스트 업로드 오류 ({rel_txt_path}): {e}", flush=True)
 
 
 if __name__ == "__main__":
