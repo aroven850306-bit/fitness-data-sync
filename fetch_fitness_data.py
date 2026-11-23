@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Garmin Connect + Strava 데이터 수집 스크립트 (Training Readiness & Training Load/ACWR 진단 포함 전체 버전)
+Garmin Connect + Strava 데이터 수집 스크립트 (운영 정리 버전)
 - 루트 디렉토리(./)에 CSV 및 fit_files/ 저장
 - Garmin 세션 토큰(JSON/파일/디렉토리) 우선 복원 + 이메일/비밀번호 로그인 fallback (429 회피 지원)
-- 가민 웰니스 + Training Readiness / Training Load / ACWR 수집 및 응답 구조 디버그 로그 출력
+- 가민 웰니스 + Training Readiness / Training Load / ACWR 수집
 - 기존 CSV의 유효 값 보존 안전 병합
 """
 
@@ -133,7 +133,6 @@ def init_garmin() -> Garmin:
     """저장된 세션 토큰(JSON/디렉토리)을 우선 사용하고, 필요 시 이메일/비밀번호로 로그인"""
     token_candidates = [v for v in (GARMIN_TOKEN, GARMIN_API_KEY) if v]
 
-    # 1. JSON 세션 토큰 문자열(GARMIN_TOKEN 또는 GARMIN_API_KEY)이 있는 경우 우선 시도
     for raw_tok in token_candidates:
         try:
             parsed = json.loads(raw_tok)
@@ -150,7 +149,6 @@ def init_garmin() -> Garmin:
         except Exception:
             pass
 
-    # 2. 로컬 토큰 디렉토리/파일 캐시 시도
     if GARMIN_TOKEN_DIR:
         tok_path = Path(GARMIN_TOKEN_DIR)
         if tok_path.exists():
@@ -163,7 +161,6 @@ def init_garmin() -> Garmin:
             except Exception as e:
                 print(f"[WARN] 캐시 토큰 로그인 실패: {e}", flush=True)
 
-    # 3. 이메일/비밀번호 로그인 fallback (429 발생 시 대기 후 재시도)
     if not (GARMIN_EMAIL and GARMIN_PASSWORD):
         raise RuntimeError(
             "Garmin 인증 정보가 없습니다. 유효한 JSON 세션 토큰(GARMIN_TOKEN/GARMIN_API_KEY) 또는 "
@@ -335,8 +332,8 @@ def fetch_garmin_activities(client: Garmin, limit: int = ACTIVITY_LIMIT) -> pd.D
     return combined
 
 
-def _fetch_readiness_and_load(client: Garmin, d_str: str, debug_log: bool = False) -> Dict[str, Any]:
-    """특정 날짜(YYYY-MM-DD)의 Training Readiness 및 Training Load / ACWR 조회 (진단 로그 지원)"""
+def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
+    """특정 날짜(YYYY-MM-DD)의 Training Readiness 및 Training Load / ACWR 조회"""
     out: Dict[str, Any] = {
         "training_readiness_score": None,
         "training_readiness_level": None,
@@ -350,8 +347,6 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str, debug_log: bool = Fals
         if hasattr(client, fn_name):
             try:
                 raw = getattr(client, fn_name)(d_str)
-                if debug_log:
-                    print(f"[DEBUG] {fn_name}({d_str}) -> {raw}", flush=True)
                 if raw:
                     score = _find_first_value(
                         raw,
@@ -366,18 +361,13 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str, debug_log: bool = Fals
                         out["training_readiness_level"] = str(level)
                     if out["training_readiness_score"] is not None:
                         break
-            except Exception as e:
-                if debug_log:
-                    print(f"[WARN] {fn_name}({d_str}) 실패: {e}", flush=True)
-        elif debug_log:
-            print(f"[DEBUG] client에 {fn_name} 메서드 없음", flush=True)
+            except Exception:
+                pass
 
     for fn_name in ("get_training_status", "get_max_metrics"):
         if hasattr(client, fn_name):
             try:
                 raw = getattr(client, fn_name)(d_str)
-                if debug_log:
-                    print(f"[DEBUG] {fn_name}({d_str}) -> {raw}", flush=True)
                 if raw:
                     status_label = _find_first_value(
                         raw,
@@ -403,11 +393,8 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str, debug_log: bool = Fals
                         out["chronic_load"] = _to_float(chronic, ndigits=1)
                     if acwr_val is not None and out["acwr"] is None:
                         out["acwr"] = _to_float(acwr_val, ndigits=2)
-            except Exception as e:
-                if debug_log:
-                    print(f"[WARN] {fn_name}({d_str}) 실패: {e}", flush=True)
-        elif debug_log:
-            print(f"[DEBUG] client에 {fn_name} 메서드 없음", flush=True)
+            except Exception:
+                pass
 
     if (
         out["acwr"] is None
@@ -515,8 +502,7 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         except Exception:
             pass
 
-        # 최근 2일치(오늘/어제)만 디버그 로그 출력하여 로그 폭주 방지
-        rl_info = _fetch_readiness_and_load(client, d_str, debug_log=(offset < 2))
+        rl_info = _fetch_readiness_and_load(client, d_str)
 
         rows.append(
             {
