@@ -7,15 +7,6 @@ on:
     - cron: '*/30 22-23,0-15 * * *'
   # GitHub Actions 탭에서 수동 버튼 클릭으로 즉시 실행 허용
   workflow_dispatch:
-    inputs:
-      save_1s_stream_gz:
-        description: '1초 원본 시계열(.json.gz) 저장 여부 (수동 실행 전용)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
 
 permissions:
   contents: write
@@ -51,7 +42,6 @@ jobs:
           MAX_HR: ${{ vars.MAX_HR || '178' }}
           WELLNESS_DAYS: ${{ github.event_name == 'schedule' && '3' || '30' }}
           ACTIVITY_LIMIT: ${{ github.event_name == 'schedule' && '15' || '100' }}
-          SAVE_1S_STREAM_GZ: ${{ github.event_name == 'workflow_dispatch' && inputs.save_1s_stream_gz || 'false' }}
         run: |
           python fetch_fitness_data.py
           python analyze_fit.py
