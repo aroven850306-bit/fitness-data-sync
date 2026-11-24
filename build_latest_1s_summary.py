@@ -133,7 +133,6 @@ def build_combined_summary(fit_path: Path, ftp: float = FTP_WATTS, max_hr: float
                 decoup = round(((ef1 - ef2) / ef1) * 100.0, 1)
 
     lines: List[str] = [
-        f"=== 직전 라이딩 1초 통합 요약 ({fit_path.name}) ===",
         f"[1. 전체 요약] 시간: {duration_min}분({n}초) | 평균파워: {_fmt_num(avg_p, 'W')} | NP: {_fmt_num(np_p, 'W')} | VI: {_fmt_num(vi, '', 2)} | 일량: {work_kj}kJ | 0W비율: {coast_pct}%",
         f"[2. 최대출력(MMP)] 5s: {_fmt_num(mmp_5s, 'W')} | 30s: {_fmt_num(mmp_30s, 'W')} | 1m: {_fmt_num(mmp_1m, 'W')} | 5m: {_fmt_num(mmp_5m, 'W')} | 20m: {_fmt_num(mmp_20m, 'W')} (추정FTP: {_fmt_num(est_ftp, 'W')})",
         f"[3. 존체류(분)] Z1:{pz1} | Z2:{pz2} | Z3:{pz3} | Z4:{pz4} | Z5:{pz5} | 평균심박: {_fmt_num(avg_hr, 'bpm')} (최대 {_fmt_num(max_hr_obs, 'bpm')}) | 평균케이던스: {_fmt_num(avg_cad, 'rpm')}",
