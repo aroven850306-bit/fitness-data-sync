@@ -1,4 +1,5 @@
 ﻿file,duration_min,avg_power,NP_watts,max_power,MMP_5s,MMP_1m,MMP_5m,MMP_20m,est_FTP_from_20m,avg_hr,max_hr,avg_cadence,efficiency_factor_EF,aerobic_decoupling_pct,left_balance_pct,right_balance_pct,left_pedal_smoothness_pct,right_pedal_smoothness_pct,combined_pedal_smoothness_pct,left_torque_effectiveness_pct,right_torque_effectiveness_pct,Z1_recovery_min,Z2_endurance_min,Z3_tempo_min,Z4_threshold_min,Z5_vo2max_min
+2026-11-24_25183390821.fit,60.1,132.6,145.6,235.0,207.8,178.5,175.7,162.3,154.2,117.2,137.0,73.6,1.24,16.85,51.6,48.4,22.8,22.8,22.8,78.8,75.8,22.1,13.2,15.4,9.0,0.3
 2026-11-23_25172578223.fit,30.5,108.3,110.3,249.0,157.6,127.0,121.6,116.1,110.3,111.6,128.0,77.7,0.99,0.95,53.2,46.8,20.6,19.7,20.1,75.1,68.5,14.8,15.1,0.5,0.1,0.1
 2026-11-21_25147395818.fit,81.0,136.3,144.0,265.0,210.6,180.7,177.2,155.7,147.9,122.3,147.0,89.1,1.18,5.52,50.9,49.1,20.3,21.1,20.7,75.5,73.7,14.4,41.1,14.7,9.6,1.2
 2026-11-20_25139521270.fit,60.6,119.2,120.6,254.0,164.8,130.3,126.4,125.4,119.1,112.8,125.0,88.6,1.07,0.1,53.1,46.9,19.7,19.4,19.5,72.5,67.7,16.6,41.2,2.5,0.3,0.1
