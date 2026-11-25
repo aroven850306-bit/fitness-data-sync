@@ -713,14 +713,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-```
-
-`build_latest_1s_summary.py`에 후보 `eFTP`(>194W) 또는 후보 `eLTHR`(>147 bpm) 감지 시 **업데이트 권고 알림과 수정 대상 안내**가 자동 생성되도록 반영했습니다.
-
-### 🔔 후보 `eFTP` / `eLTHR` 감지 시 실제 수정해야 할 대상 정리
-* **파이썬 스크립트(`.py`) 코드 수정 여부:** **수정 불필요** (`build_latest_1s_summary.py`, `fetch_fitness_data.py`, `analyze_fit.py` 모두 환경변수 `FTP_WATTS`, `LTHR_BPM`을 읽어 계산하므로 로직을 고칠 필요가 없습니다.)
-* **실제로 값을 바꿔야 하는 파일 및 설정:**
-  1. **GitHub Actions Variables:** `FTP_WATTS` (기본 `194`) / `LTHR_BPM` (기본 `147`)
-  2. **기준값 설정 파일:** `performance_baseline.json` (`ftp_watts`, `lthr`, `updated_at`)
-  3. **코치 통합 운영 지침 & 노트북 지침:** `cycling_coach_master_instructions.md` (제2.3항·제5.3항 기준값 표)
-  4. **데일리 마스터 리포트:** `cycling_daily_report_11_23.html` (`BASELINE.ftp` / `BASELINE.lthr` 및 심박 존 텍스트)
