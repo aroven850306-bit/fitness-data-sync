@@ -3,7 +3,7 @@
 직전 라이딩 1초 FIT 시계열 기반 워크아웃 블록 자동 감지 및 요약 생성기
 - ① 자동 블록 감지(30초 롤링 파워/케이던스 변화점 + 지속 시간 기반 Warmup / Work / Recovery / Cooldown 분할)
 - 공식 FTP 기준값(기본 194W, 환경변수 FTP_WATTS로 오버라이드 가능) 및 최대심박 기준값(기본 173 bpm) 반영
-- 스프레드시트 #ERROR! 예방을 위한 summary_line 정화 및 quoting=csv.QUOTE_ALL CSV 저장
+- 스프레드시트 첫 줄 #ERROR! 예방을 위한 순수 텍스트 summary_line 정화 및 quoting=csv.QUOTE_ALL CSV 저장
 - latest_ride_1s_summary.txt 및 latest_ride_1s_summary.csv 생성
 """
 
@@ -13,6 +13,7 @@ import csv
 import gzip
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -103,17 +104,15 @@ def _format_mmss(sec: int) -> str:
 
 def _sanitize_summary_line(raw_text: str) -> str:
     """
-    구글 스프레드시트/엑셀 셀에서 수식 또는 오류(#ERROR!)로 오인되지 않도록
-    줄바꿈·제어문자·#ERROR! 문자열을 제거하고 일반 텍스트 단일 라인으로 정화한다.
+    구글 스프레드시트 셀에서 수식 또는 파싱 오류(#ERROR!)가 발생하지 않도록
+    줄바꿈·제어문자·#ERROR!·선행 기호 및 수식 유발 문자를 제거한 순수 문자열을 반환한다.
     """
-    cleaned = raw_text.replace("#ERROR!", "ERR").replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
-    cleaned = " ".join(cleaned.split())
+    cleaned = raw_text.replace("#ERROR!", "ERR").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    cleaned = re.sub(r"[=+\-@#|<>(){}\[\]]", " ", cleaned)
+    cleaned = " ".join(cleaned.split()).strip()
     if not cleaned:
-        return "1S_SUMMARY | empty"
-    if cleaned[0] in ("=", "+", "-", "@", "#", "\t"):
-        stripped_val = cleaned.lstrip("=+-@#\t ")
-        cleaned = f"1S_SUMMARY | {stripped_val}"
-    return cleaned
+        return "SUMMARY_1S empty"
+    return f"SUMMARY_1S {cleaned}"
 
 
 def _compute_np(power_filled: np.ndarray) -> float:
@@ -451,72 +450,72 @@ def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tu
     rec_blocks = [b for b in blocks if b.block_type == "RECOVERY"]
 
     lines: List[str] = []
-    lines.append(f"=== 직전 라이딩 워크아웃 블록 정밀 요약 ({resolved_path.name}) ===")
+    lines.append(f"직전 라이딩 워크아웃 블록 정밀 요약 {resolved_path.name}")
     lines.append(
-        f"[1. 전체 요약] 시간: {duration_min}분({n_sec}초) | 평균파워: {avg_power}W | NP: {np_power}W | "
-        f"VI: {vi} | IF: {intensity_factor} | TSS({int(ftp)}W): {tss} | 일량: {work_kj}kJ | 0W비율: {zero_pct}%"
+        f"1. 전체 요약 시간 {duration_min}분 {n_sec}초 / 평균파워 {avg_power}W / NP {np_power}W / "
+        f"VI {vi} / IF {intensity_factor} / TSS {int(ftp)}W 기준 {tss} / 일량 {work_kj}kJ / 0W비율 {zero_pct}%"
     )
     lines.append(
-        f"[2. 최대출력(MMP)] 5s: {mmp_5s if mmp_5s is not None else 'N/A'}W | "
-        f"30s: {mmp_30s if mmp_30s is not None else 'N/A'}W | "
-        f"1m: {mmp_1m if mmp_1m is not None else 'N/A'}W | "
-        f"5m: {mmp_5m if mmp_5m is not None else 'N/A'}W | "
-        f"20m: {mmp_20m if mmp_20m is not None else 'N/A'}W"
-        + (f" (세션 eFTP 참고: {session_eftp}W)" if session_eftp is not None else "")
+        f"2. 최대출력 MMP 5s {mmp_5s if mmp_5s is not None else 'NA'}W / "
+        f"30s {mmp_30s if mmp_30s is not None else 'NA'}W / "
+        f"1m {mmp_1m if mmp_1m is not None else 'NA'}W / "
+        f"5m {mmp_5m if mmp_5m is not None else 'NA'}W / "
+        f"20m {mmp_20m if mmp_20m is not None else 'NA'}W"
+        + (f" / 세션 eFTP 참고 {session_eftp}W" if session_eftp is not None else "")
     )
     lines.append(
-        f"[3. 존체류(분)] Z1:{zones['Z1']} | Z2:{zones['Z2']} | Z3:{zones['Z3']} | Z4:{zones['Z4']} | Z5:{zones['Z5']} | "
-        f"평균심박: {avg_hr if avg_hr is not None else 'N/A'}bpm (최대 {max_hr_val if max_hr_val is not None else 'N/A'}bpm) | "
-        f"평균케이던스: {avg_cad if avg_cad is not None else 'N/A'}rpm | 디커플링: {decoupling if decoupling is not None else 'N/A'}%"
+        f"3. 존체류 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / "
+        f"평균심박 {avg_hr if avg_hr is not None else 'NA'}bpm 최대 {max_hr_val if max_hr_val is not None else 'NA'}bpm / "
+        f"평균케이던스 {avg_cad if avg_cad is not None else 'NA'}rpm / 디커플링 {decoupling if decoupling is not None else 'NA'}%"
     )
-    lines.append(f"[4. 워크아웃 블록별 수행 분석 · ① 자동 블록 감지 ({len(blocks)}개 블록)]")
+    lines.append(f"4. 워크아웃 블록별 수행 분석 1 자동 블록 감지 {len(blocks)}개 블록")
 
     for b in blocks:
         b_min = round(b.duration_sec / 60.0, 1)
         ftp_pct = round((b.avg_power / ftp) * 100.0, 0) if ftp > 0 else 0.0
-        hr_part = f"심박 {b.avg_hr}bpm" + (f"(최대 {b.max_hr})" if b.max_hr is not None else "") if b.avg_hr is not None else "심박 N/A"
-        cad_part = f"케이던스 {b.avg_cadence}rpm" if b.avg_cadence is not None else "케이던스 N/A"
+        hr_part = f"심박 {b.avg_hr}bpm 최대 {b.max_hr}" if (b.avg_hr is not None and b.max_hr is not None) else (f"심박 {b.avg_hr}bpm" if b.avg_hr is not None else "심박 NA")
+        cad_part = f"케이던스 {b.avg_cadence}rpm" if b.avg_cadence is not None else "케이던스 NA"
         ef_part = f"EF {b.ef}" if b.ef is not None else ""
         delta_part = ""
         if b.hr_delta_prev is not None:
-            sign = "+" if b.hr_delta_prev > 0 else ""
-            delta_part = f" | 전구간대비심박 {sign}{b.hr_delta_prev}bpm"
+            sign = "증가 " if b.hr_delta_prev > 0 else ("감소 " if b.hr_delta_prev < 0 else "")
+            delta_part = f" / 전구간대비심박 {sign}{abs(b.hr_delta_prev)}bpm"
 
         extra_bits = [x for x in (hr_part, cad_part, ef_part) if x]
         lines.append(
-            f"- [{b.label}] {_format_mmss(b.start_sec)}~{_format_mmss(b.end_sec)} ({b_min}분) | "
-            f"평균 {b.avg_power}W ({int(ftp_pct)}% FTP · 최대 {b.max_power}W) | "
-            + " | ".join(extra_bits)
+            f"{b.label} {_format_mmss(b.start_sec)}~{_format_mmss(b.end_sec)} {b_min}분 / "
+            f"평균 {b.avg_power}W {int(ftp_pct)}% FTP 최대 {b.max_power}W / "
+            + " / ".join(extra_bits)
             + delta_part
         )
 
-    lines.append("[5. 인터벌 핵심 진단]")
+    lines.append("5. 인터벌 핵심 진단")
     if len(work_blocks) >= 2:
         first_w = work_blocks[0]
         last_w = work_blocks[-1]
         p_diff_pct = round(((last_w.avg_power - first_w.avg_power) / first_w.avg_power) * 100.0, 1) if first_w.avg_power > 0 else 0.0
-        p_sign = "+" if p_diff_pct > 0 else ""
+        p_dir = "상승 " if p_diff_pct > 0 else ("하락 " if p_diff_pct < 0 else "")
         lines.append(
-            f"- 메인 파워 추이: {first_w.label}({first_w.avg_power}W) -> {last_w.label}({last_w.avg_power}W) [{p_sign}{p_diff_pct}%]"
+            f"메인 파워 추이 {first_w.label} {first_w.avg_power}W 에서 {last_w.label} {last_w.avg_power}W 로 {p_dir}{abs(p_diff_pct)}%"
         )
         if first_w.avg_hr is not None and last_w.avg_hr is not None:
             hr_diff = round(last_w.avg_hr - first_w.avg_hr, 1)
-            h_sign = "+" if hr_diff > 0 else ""
+            h_dir = "상승 " if hr_diff > 0 else ("하락 " if hr_diff < 0 else "")
             lines.append(
-                f"- 메인 심박 추이: {first_w.label}({first_w.avg_hr}bpm) -> {last_w.label}({last_w.avg_hr}bpm) [{h_sign}{hr_diff}bpm]"
+                f"메인 심박 추이 {first_w.label} {first_w.avg_hr}bpm 에서 {last_w.label} {last_w.avg_hr}bpm 로 {h_dir}{abs(hr_diff)}bpm"
             )
     elif len(work_blocks) == 1:
         w0 = work_blocks[0]
         lines.append(
-            f"- 단일 메인 구간({w0.label}): {round(w0.duration_sec / 60.0, 1)}분 · 평균 {w0.avg_power}W · 케이던스 {w0.avg_cadence or 'N/A'}rpm"
+            f"단일 메인 구간 {w0.label} {round(w0.duration_sec / 60.0, 1)}분 / 평균 {w0.avg_power}W / 케이던스 {w0.avg_cadence or 'NA'}rpm"
         )
     else:
-        lines.append("- 뚜렷한 고부하 인터벌 블록 미탐지 (기초/유산소 연속 주행 성격)")
+        lines.append("뚜렷한 고부하 인터벌 블록 미탐지 기초 유산소 연속 주행 성격")
 
     rec_drops = [b.hr_delta_prev for b in rec_blocks if b.hr_delta_prev is not None]
     if rec_drops:
         avg_drop = round(float(np.mean(rec_drops)), 1)
-        lines.append(f"- 회복 구간 심박 변화: 평균 {avg_drop}bpm (구간별 {rec_drops})")
+        lines.append(f"회복 구간 심박 변화 평균 {avg_drop}bpm")
 
     summary_text = "\n".join(lines) + "\n"
 
