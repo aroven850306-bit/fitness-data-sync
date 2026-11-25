@@ -99,6 +99,20 @@ def _format_mmss(sec: int) -> str:
     return f"{mm:02d}:{ss:02d}"
 
 
+def _sanitize_summary_line(raw_text: str) -> str:
+    """
+    스프레드시트 셀에서 수식(#ERROR!)으로 오인되지 않도록 줄바꿈과 제어문자를 제거하고
+    선행 특수문자(=, +, -, @)를 안전한 접두사로 보호한다.
+    """
+    cleaned = raw_text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return "[1S_SUMMARY] empty"
+    if cleaned[0] in ("=", "+", "-", "@", "\t"):
+        cleaned = f"[1S_SUMMARY] {cleaned}"
+    return cleaned
+
+
 def _compute_np(power_filled: np.ndarray) -> float:
     if len(power_filled) == 0:
         return 0.0
@@ -524,7 +538,7 @@ def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tu
         "decoupling_pct": decoupling,
         "block_count": len(blocks),
         "work_block_count": len(work_blocks),
-        "summary_line": summary_text.replace("\n", " || ").strip(),
+        "summary_line": _sanitize_summary_line(summary_text),
     }
     return summary_text, summary_row
 
