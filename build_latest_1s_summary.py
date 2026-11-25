@@ -258,12 +258,12 @@ def _build_threshold_update_guidance(
     trigger_summary = " / ".join(triggers)
     guide_lines: List[str] = [
         f"6. 기준치 갱신 알림 및 수정 대상 안내 {trigger_summary}",
-        "후보값만으로는 공식 기준치를 자동 변경하지 않습니다. 표준 테스트 또는 세션 검증 후 확정 시 아래 파일과 설정을 업데이트하세요.",
+        "후보값만으로는 공식 기준치를 자동 변경하지 않습니다. 표준 테스트 또는 세션 검증 후 확정 시 아래 5개 항목을 업데이트하세요.",
         "수정 대상 1 GitHub Actions 환경변수 Vars FTP_WATTS 및 LTHR_BPM 새 확정값으로 변경 (fetch_fitness_data.py, analyze_fit.py, build_latest_1s_summary.py 코드 상 수정 불필요)",
         "수정 대상 2 performance_baseline.json 파일의 ftp_watts 또는 lthr 및 updated_at 갱신",
         "수정 대상 3 cycling_coach_master_instructions.md 제2.3항 제5.3항 공식 기준값 표 및 노트북 지침 업데이트",
         "수정 대상 4 cycling_daily_report_11_23.html 상수 BASELINE.ftp 또는 BASELINE.lthr 및 심박 존 범위 텍스트 일괄 연동",
-        "수정 대상 5 이후 생성되는 신규 Zwift 워크아웃 zwift_YYYY-MM-DD_요일_종류.zwo 목표 파워 및 description 반영",
+        "수정 대상 5 신규 Zwift 워크아웃 이후 생성되는 zwift_YYYY-MM-DD_요일_종류.zwo 목표 파워 및 description 새 기준값 반영",
     ]
     return trigger_summary, guide_lines
 
@@ -671,7 +671,8 @@ def build_summary(
         "update_action_required": bool(ftp_candidate or lthr_candidate),
         "update_target_files": (
             "GitHub Vars(FTP_WATTS, LTHR_BPM), performance_baseline.json, "
-            "cycling_coach_master_instructions.md, cycling_daily_report_11_23.html"
+            "cycling_coach_master_instructions.md, cycling_daily_report_11_23.html, "
+            "zwift_YYYY-MM-DD_요일_종류.zwo"
             if (ftp_candidate or lthr_candidate)
             else ""
         ),
@@ -702,11 +703,12 @@ def main() -> None:
     print(summary_text)
     if summary_row.get("update_action_required"):
         print("====================================================================")
-        print("[ALERT] 후보 eFTP 또는 후보 eLTHR 기준 초과 감지! 아래 항목 업데이트 필요:")
+        print("[ALERT] 후보 eFTP 또는 후보 eLTHR 기준 초과 감지! 아래 5개 항목 업데이트 필요:")
         print("  1) 파이썬 코드(.py) 로직 수정은 불필요 (환경변수 연동 구조)")
         print("  2) GitHub Repository Variables: FTP_WATTS / LTHR_BPM 값 수정")
         print("  3) 설정/지침 파일: performance_baseline.json, cycling_coach_master_instructions.md")
         print("  4) 마스터 리포트: cycling_daily_report_11_23.html (BASELINE 및 존 범위)")
+        print("  5) 신규 Zwift 워크아웃: 이후 생성되는 zwift_YYYY-MM-DD_요일_종류.zwo 목표 파워 및 <description>")
         print("====================================================================")
     print(f"[OK] 저장 완료: {OUT_TXT} / {OUT_CSV}")
 
