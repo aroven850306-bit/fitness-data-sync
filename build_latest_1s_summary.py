@@ -143,6 +143,32 @@ def _compute_mmp(power_filled: np.ndarray, window_sec: int) -> Optional[float]:
     return round(float(val), 1)
 
 
+def _compute_mmhr_and_elthr(
+    hr_arr: np.ndarray,
+    intensity_factor: float,
+    lthr: float,
+) -> Tuple[Optional[float], Optional[float], bool]:
+    """
+    20분 최대 평균 심박(MMHR 20m) 및 세션 eLTHR(추정 젖산역치 심박) 산출
+    - 센서 스파이크(>210 bpm 또는 <40 bpm) 제외 후 1,200초(20분) 이동평균 최고치 계산
+    - 고강도 지속 세션(IF >= 0.85)에서 산출된 20분 평균 심박 × 0.95를 eLTHR 후보로 판정
+    """
+    hr_clean = np.where((hr_arr >= 40.0) & (hr_arr <= 210.0), hr_arr, np.nan)
+    s_hr = pd.Series(hr_clean)
+    if s_hr.notna().sum() < 1200:
+        return None, None, False
+
+    roll_20m = s_hr.rolling(window=1200, min_periods=1080).mean().max()
+    if pd.isna(roll_20m):
+        return None, None, False
+
+    mmhr_20m = round(float(roll_20m), 1)
+    # 고강도 지속 세션(IF >= 0.85)일 때만 유효한 eLTHR 추정치로 인정 (Z2/저강도 세션 오탐 방지)
+    session_elthr = round(mmhr_20m * 0.95, 1) if intensity_factor >= 0.85 else None
+    is_candidate = bool(session_elthr is not None and session_elthr > lthr)
+    return mmhr_20m, session_elthr, is_candidate
+
+
 def _compute_decoupling(power_arr: np.ndarray, hr_arr: np.ndarray) -> Optional[float]:
     mask = np.isfinite(power_arr) & np.isfinite(hr_arr) & (power_arr > 0) & (hr_arr > 0)
     if int(np.sum(mask)) < 600:
@@ -481,6 +507,7 @@ def build_summary(
     mmp_5m = _compute_mmp(p_filled, 300)
     mmp_20m = _compute_mmp(p_filled, 1200)
     session_eftp = round(mmp_20m * 0.95, 1) if mmp_20m is not None else None
+    mmhr_20m, session_elthr, lthr_candidate = _compute_mmhr_and_elthr(hr_raw, intensity_factor, lthr)
 
     hr_valid = hr_raw[np.isfinite(hr_raw) & (hr_raw > 0)]
     avg_hr = round(float(np.mean(hr_valid)), 1) if len(hr_valid) > 0 else None
@@ -515,8 +542,11 @@ def build_summary(
         f"3. 파워존체류 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / "
         f"심박존체류 LTHR {int(lthr)}bpm 기준 분 HRZ1 {hr_zones['Z1']} / HRZ2 {hr_zones['Z2']} / "
         f"HRZ3 {hr_zones['Z3']} / HRZ4 {hr_zones['Z4']} / HRZ5 {hr_zones['Z5']} / "
-        f"평균심박 {avg_hr if avg_hr is not None else 'NA'}bpm 최대 {max_hr_val if max_hr_val is not None else 'NA'}bpm / "
-        f"평균케이던스 {avg_cad if avg_cad is not None else 'NA'}rpm / 디커플링 {decoupling if decoupling is not None else 'NA'}%"
+        f"평균심박 {avg_hr if avg_hr is not None else 'NA'}bpm 최대 {max_hr_val if max_hr_val is not None else 'NA'}bpm "
+        f"20m최대심박 {mmhr_20m if mmhr_20m is not None else 'NA'}bpm"
+        + (f" 세션eLTHR {session_elthr}bpm" if session_elthr is not None else "")
+        + (" 후보LTHR갱신검토" if lthr_candidate else "")
+        + f" / 평균케이던스 {avg_cad if avg_cad is not None else 'NA'}rpm / 디커플링 {decoupling if decoupling is not None else 'NA'}%"
     )
     lines.append(f"4. 워크아웃 블록별 수행 분석 1 자동 블록 감지 {len(blocks)}개 블록")
 
@@ -586,6 +616,9 @@ def build_summary(
         "session_eftp_ref": session_eftp,
         "avg_hr": avg_hr,
         "max_hr": max_hr_val,
+        "mmhr_20m": mmhr_20m,
+        "session_elthr_ref": session_elthr,
+        "lthr_candidate_alert": lthr_candidate,
         "hr_z1_min": hr_zones["Z1"],
         "hr_z2_min": hr_zones["Z2"],
         "hr_z3_min": hr_zones["Z3"],
