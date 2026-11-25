@@ -111,7 +111,8 @@ def _sanitize_summary_line(raw_text: str) -> str:
     if not cleaned:
         return "1S_SUMMARY | empty"
     if cleaned[0] in ("=", "+", "-", "@", "#", "\t"):
-        cleaned = f"1S_SUMMARY | {cleaned.lstrip('=+-@#\t ')}"
+        stripped_val = cleaned.lstrip("=+-@#\t ")
+        cleaned = f"1S_SUMMARY | {stripped_val}"
     return cleaned
 
 
