@@ -3,6 +3,7 @@
 직전 라이딩 1초 FIT 시계열 기반 워크아웃 블록 자동 감지 및 요약 생성기
 - ① 자동 블록 감지(30초 롤링 파워/케이던스 변화점 + 지속 시간 기반 Warmup / Work / Recovery / Cooldown 분할)
 - 공식 FTP 기준값(기본 194W) 및 LTHR 기준값(기본 147 bpm, HRmax 173 bpm) 기반 파워·심박 5존(Z1~Z5) 통일 산출
+- 후보 eFTP(> 공식 FTP) 또는 후보 eLTHR(> 공식 LTHR, IF >= 0.85) 감지 시 업데이트 권고 및 수정 대상 파일·코드 안내 생성
 - 스프레드시트 첫 줄 #ERROR! 예방을 위한 순수 텍스트 summary_line 정화 및 quoting=csv.QUOTE_ALL CSV 저장
 - latest_ride_1s_summary.txt 및 latest_ride_1s_summary.csv 생성
 """
@@ -163,7 +164,6 @@ def _compute_mmhr_and_elthr(
         return None, None, False
 
     mmhr_20m = round(float(roll_20m), 1)
-    # 고강도 지속 세션(IF >= 0.85)일 때만 유효한 eLTHR 추정치로 인정 (Z2/저강도 세션 오탐 방지)
     session_elthr = round(mmhr_20m * 0.95, 1) if intensity_factor >= 0.85 else None
     is_candidate = bool(session_elthr is not None and session_elthr > lthr)
     return mmhr_20m, session_elthr, is_candidate
@@ -232,6 +232,40 @@ def _hr_zone_times_minutes(hr_arr: np.ndarray, lthr: float) -> Dict[str, float]:
         "Z4": round(z4 / 60.0, 1),
         "Z5": round(z5 / 60.0, 1),
     }
+
+
+def _build_threshold_update_guidance(
+    ftp: float,
+    lthr: float,
+    session_eftp: Optional[float],
+    ftp_candidate: bool,
+    session_elthr: Optional[float],
+    lthr_candidate: bool,
+) -> Tuple[str, List[str]]:
+    """
+    후보 eFTP(> 공식 FTP) 또는 후보 eLTHR(> 공식 LTHR)가 감지되었을 때
+    업데이트 권고 알림과 수정해야 할 파일·설정·코드 안내를 생성한다.
+    """
+    if not ftp_candidate and not lthr_candidate:
+        return "", []
+
+    triggers: List[str] = []
+    if ftp_candidate and session_eftp is not None:
+        triggers.append(f"후보 eFTP {session_eftp}W 감지 (공식 {int(ftp)}W 초과)")
+    if lthr_candidate and session_elthr is not None:
+        triggers.append(f"후보 eLTHR {session_elthr}bpm 감지 (공식 {int(lthr)}bpm 초과)")
+
+    trigger_summary = " / ".join(triggers)
+    guide_lines: List[str] = [
+        f"6. 기준치 갱신 알림 및 수정 대상 안내 {trigger_summary}",
+        "후보값만으로는 공식 기준치를 자동 변경하지 않습니다. 표준 테스트 또는 세션 검증 후 확정 시 아래 파일과 설정을 업데이트하세요.",
+        "수정 대상 1 GitHub Actions 환경변수 Vars FTP_WATTS 및 LTHR_BPM 새 확정값으로 변경 (fetch_fitness_data.py, analyze_fit.py, build_latest_1s_summary.py 코드 상 수정 불필요)",
+        "수정 대상 2 performance_baseline.json 파일의 ftp_watts 또는 lthr 및 updated_at 갱신",
+        "수정 대상 3 cycling_coach_master_instructions.md 제2.3항 제5.3항 공식 기준값 표 및 노트북 지침 업데이트",
+        "수정 대상 4 cycling_daily_report_11_23.html 상수 BASELINE.ftp 또는 BASELINE.lthr 및 심박 존 범위 텍스트 일괄 연동",
+        "수정 대상 5 이후 생성되는 신규 Zwift 워크아웃 zwift_YYYY-MM-DD_요일_종류.zwo 목표 파워 및 description 반영",
+    ]
+    return trigger_summary, guide_lines
 
 
 def _parse_fit_1s_series(fit_path: Path) -> Tuple[Optional[pd.DataFrame], Dict[str, Any]]:
@@ -507,6 +541,8 @@ def build_summary(
     mmp_5m = _compute_mmp(p_filled, 300)
     mmp_20m = _compute_mmp(p_filled, 1200)
     session_eftp = round(mmp_20m * 0.95, 1) if mmp_20m is not None else None
+    ftp_candidate = bool(session_eftp is not None and session_eftp > ftp)
+
     mmhr_20m, session_elthr, lthr_candidate = _compute_mmhr_and_elthr(hr_raw, intensity_factor, lthr)
 
     hr_valid = hr_raw[np.isfinite(hr_raw) & (hr_raw > 0)]
@@ -537,6 +573,7 @@ def build_summary(
         f"5m {mmp_5m if mmp_5m is not None else 'NA'}W / "
         f"20m {mmp_20m if mmp_20m is not None else 'NA'}W"
         + (f" / 세션 eFTP 참고 {session_eftp}W" if session_eftp is not None else "")
+        + (" 후보FTP갱신검토" if ftp_candidate else "")
     )
     lines.append(
         f"3. 파워존체류 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / "
@@ -597,6 +634,17 @@ def build_summary(
         avg_drop = round(float(np.mean(rec_drops)), 1)
         lines.append(f"회복 구간 심박 변화 평균 {avg_drop}bpm")
 
+    trigger_summary, guide_lines = _build_threshold_update_guidance(
+        ftp=ftp,
+        lthr=lthr,
+        session_eftp=session_eftp,
+        ftp_candidate=ftp_candidate,
+        session_elthr=session_elthr,
+        lthr_candidate=lthr_candidate,
+    )
+    if guide_lines:
+        lines.extend(guide_lines)
+
     summary_text = "\n".join(lines) + "\n"
 
     summary_row: Dict[str, Any] = {
@@ -614,11 +662,19 @@ def build_summary(
         "mmp_5m": mmp_5m,
         "mmp_20m": mmp_20m,
         "session_eftp_ref": session_eftp,
+        "ftp_candidate_alert": ftp_candidate,
         "avg_hr": avg_hr,
         "max_hr": max_hr_val,
         "mmhr_20m": mmhr_20m,
         "session_elthr_ref": session_elthr,
         "lthr_candidate_alert": lthr_candidate,
+        "update_action_required": bool(ftp_candidate or lthr_candidate),
+        "update_target_files": (
+            "GitHub Vars(FTP_WATTS, LTHR_BPM), performance_baseline.json, "
+            "cycling_coach_master_instructions.md, cycling_daily_report_11_23.html"
+            if (ftp_candidate or lthr_candidate)
+            else ""
+        ),
         "hr_z1_min": hr_zones["Z1"],
         "hr_z2_min": hr_zones["Z2"],
         "hr_z3_min": hr_zones["Z3"],
@@ -644,8 +700,27 @@ def main() -> None:
             quoting=csv.QUOTE_ALL,
         )
     print(summary_text)
+    if summary_row.get("update_action_required"):
+        print("====================================================================")
+        print("[ALERT] 후보 eFTP 또는 후보 eLTHR 기준 초과 감지! 아래 항목 업데이트 필요:")
+        print("  1) 파이썬 코드(.py) 로직 수정은 불필요 (환경변수 연동 구조)")
+        print("  2) GitHub Repository Variables: FTP_WATTS / LTHR_BPM 값 수정")
+        print("  3) 설정/지침 파일: performance_baseline.json, cycling_coach_master_instructions.md")
+        print("  4) 마스터 리포트: cycling_daily_report_11_23.html (BASELINE 및 존 범위)")
+        print("====================================================================")
     print(f"[OK] 저장 완료: {OUT_TXT} / {OUT_CSV}")
 
 
 if __name__ == "__main__":
     main()
+```
+
+`build_latest_1s_summary.py`에 후보 `eFTP`(>194W) 또는 후보 `eLTHR`(>147 bpm) 감지 시 **업데이트 권고 알림과 수정 대상 안내**가 자동 생성되도록 반영했습니다.
+
+### 🔔 후보 `eFTP` / `eLTHR` 감지 시 실제 수정해야 할 대상 정리
+* **파이썬 스크립트(`.py`) 코드 수정 여부:** **수정 불필요** (`build_latest_1s_summary.py`, `fetch_fitness_data.py`, `analyze_fit.py` 모두 환경변수 `FTP_WATTS`, `LTHR_BPM`을 읽어 계산하므로 로직을 고칠 필요가 없습니다.)
+* **실제로 값을 바꿔야 하는 파일 및 설정:**
+  1. **GitHub Actions Variables:** `FTP_WATTS` (기본 `194`) / `LTHR_BPM` (기본 `147`)
+  2. **기준값 설정 파일:** `performance_baseline.json` (`ftp_watts`, `lthr`, `updated_at`)
+  3. **코치 통합 운영 지침 & 노트북 지침:** `cycling_coach_master_instructions.md` (제2.3항·제5.3항 기준값 표)
+  4. **데일리 마스터 리포트:** `cycling_daily_report_11_23.html` (`BASELINE.ftp` / `BASELINE.lthr` 및 심박 존 텍스트)
