@@ -4,6 +4,7 @@ Garmin Connect + Strava 데이터 수집 스크립트 (운영 정리 버전)
 - 루트 디렉토리(./)에 CSV 및 fit_files/ 저장
 - Garmin 세션 토큰(JSON/파일/디렉토리) 우선 복원 + 이메일/비밀번호 로그인 fallback (429 회피 지원)
 - 가민 웰니스 + Training Readiness / Training Load / ACWR 수집
+- 바디배터리 현재 잔량(body_battery_current) 실측값 안전 추출 (없으면 None으로 유지)
 - 기존 CSV의 유효 값 보존 안전 병합
 """
 
@@ -422,6 +423,7 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         avg_stress = None
         bb_high = None
         bb_low = None
+        bb_current = None
         hrv_avg = None
         hrv_status = None
         hrv_base_low = None
@@ -436,6 +438,10 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             avg_stress = stats.get("averageStressLevel")
             bb_high = stats.get("bodyBatteryHighestValue")
             bb_low = stats.get("bodyBatteryLowestValue")
+            bb_current = _find_first_value(
+                stats,
+                ["bodyBatteryCurrentValue", "currentBodyBattery", "bodyBatteryLatestValue"],
+            )
             steps = stats.get("totalSteps")
         except Exception:
             pass
@@ -456,21 +462,27 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             except Exception:
                 pass
 
-        if bb_high is None or bb_low is None:
-            try:
-                bb_list = client.get_body_battery(d_str, d_str) or []
-                if bb_list and isinstance(bb_list, list):
-                    bb_vals = [
-                        v[1]
-                        for entry in bb_list
-                        for v in (entry.get("bodyBatteryValuesArray") or [])
-                        if isinstance(v, (list, tuple)) and len(v) >= 2 and v[1] is not None
-                    ]
-                    if bb_vals:
+        # get_body_battery에서 시계열 마지막 유효 잔량(bb_current) 및 최고/최저 보완 추출
+        try:
+            bb_list = client.get_body_battery(d_str, d_str) or []
+            if bb_list and isinstance(bb_list, list):
+                bb_pairs = [
+                    (v[0], v[1])
+                    for entry in bb_list
+                    for v in (entry.get("bodyBatteryValuesArray") or [])
+                    if isinstance(v, (list, tuple)) and len(v) >= 2 and v[1] is not None
+                ]
+                if bb_pairs:
+                    bb_pairs.sort(key=lambda item: item[0])
+                    bb_vals = [p[1] for p in bb_pairs]
+                    if bb_high is None:
                         bb_high = max(bb_vals)
+                    if bb_low is None:
                         bb_low = min(bb_vals)
-            except Exception:
-                pass
+                    if bb_current is None:
+                        bb_current = bb_pairs[-1][1]
+        except Exception:
+            pass
 
         if avg_stress is None:
             try:
@@ -511,6 +523,7 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
                 "avg_stress": avg_stress,
                 "body_battery_high": bb_high,
                 "body_battery_low": bb_low,
+                "body_battery_current": bb_current,
                 "hrv_last_night_avg": hrv_avg,
                 "hrv_status": hrv_status,
                 "hrv_baseline_low": hrv_base_low,
