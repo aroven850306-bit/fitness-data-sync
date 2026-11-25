@@ -3,11 +3,13 @@
 직전 라이딩 1초 FIT 시계열 기반 워크아웃 블록 자동 감지 및 요약 생성기
 - ① 자동 블록 감지(30초 롤링 파워/케이던스 변화점 + 지속 시간 기반 Warmup / Work / Recovery / Cooldown 분할)
 - 공식 FTP 기준값(기본 194W, 환경변수 FTP_WATTS로 오버라이드 가능) 및 최대심박 기준값(기본 173 bpm) 반영
+- 스프레드시트 #ERROR! 예방을 위한 summary_line 정화 및 quoting=csv.QUOTE_ALL CSV 저장
 - latest_ride_1s_summary.txt 및 latest_ride_1s_summary.csv 생성
 """
 
 from __future__ import annotations
 
+import csv
 import gzip
 import json
 import os
@@ -101,15 +103,15 @@ def _format_mmss(sec: int) -> str:
 
 def _sanitize_summary_line(raw_text: str) -> str:
     """
-    스프레드시트 셀에서 수식(#ERROR!)으로 오인되지 않도록 줄바꿈과 제어문자를 제거하고
-    선행 특수문자(=, +, -, @)를 안전한 접두사로 보호한다.
+    구글 스프레드시트/엑셀 셀에서 수식 또는 오류(#ERROR!)로 오인되지 않도록
+    줄바꿈·제어문자·#ERROR! 문자열을 제거하고 일반 텍스트 단일 라인으로 정화한다.
     """
-    cleaned = raw_text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
+    cleaned = raw_text.replace("#ERROR!", "ERR").replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
     cleaned = " ".join(cleaned.split())
     if not cleaned:
-        return "[1S_SUMMARY] empty"
-    if cleaned[0] in ("=", "+", "-", "@", "\t"):
-        cleaned = f"[1S_SUMMARY] {cleaned}"
+        return "1S_SUMMARY | empty"
+    if cleaned[0] in ("=", "+", "-", "@", "#", "\t"):
+        cleaned = f"1S_SUMMARY | {cleaned.lstrip('=+-@#\t ')}"
     return cleaned
 
 
@@ -547,7 +549,12 @@ def main() -> None:
     summary_text, summary_row = build_summary(ftp=FTP_WATTS)
     OUT_TXT.write_text(summary_text, encoding="utf-8")
     if summary_row:
-        pd.DataFrame([summary_row]).to_csv(OUT_CSV, index=False, encoding="utf-8-sig")
+        pd.DataFrame([summary_row]).to_csv(
+            OUT_CSV,
+            index=False,
+            encoding="utf-8-sig",
+            quoting=csv.QUOTE_ALL,
+        )
     print(summary_text)
     print(f"[OK] 저장 완료: {OUT_TXT} / {OUT_CSV}")
 
