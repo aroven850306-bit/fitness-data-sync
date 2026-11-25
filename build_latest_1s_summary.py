@@ -2,7 +2,7 @@
 """
 직전 라이딩 1초 FIT 시계열 기반 워크아웃 블록 자동 감지 및 요약 생성기
 - ① 자동 블록 감지(30초 롤링 파워/케이던스 변화점 + 지속 시간 기반 Warmup / Work / Recovery / Cooldown 분할)
-- 공식 FTP 기준값(기본 194W, 환경변수 FTP_WATTS로 오버라이드 가능) 및 최대심박 기준값(기본 173 bpm) 반영
+- 공식 FTP 기준값(기본 194W) 및 LTHR 기준값(기본 147 bpm, HRmax 173 bpm) 기반 파워·심박 5존(Z1~Z5) 통일 산출
 - 스프레드시트 첫 줄 #ERROR! 예방을 위한 순수 텍스트 summary_line 정화 및 quoting=csv.QUOTE_ALL CSV 저장
 - latest_ride_1s_summary.txt 및 latest_ride_1s_summary.csv 생성
 """
@@ -32,14 +32,17 @@ OUT_TXT = ROOT_DIR / "latest_ride_1s_summary.txt"
 OUT_CSV = ROOT_DIR / "latest_ride_1s_summary.csv"
 
 
-def _load_env_baseline() -> Tuple[float, float]:
+def _load_env_baseline() -> Tuple[float, float, float]:
     """
-    환경변수(FTP_WATTS, MAX_HR)에서 기준값을 읽고, 없으면 기본값(194W, 173 bpm)을 반환한다.
+    환경변수(FTP_WATTS, LTHR_BPM, MAX_HR)에서 기준값을 읽고,
+    없으면 공식 확정 기준값(194W, LTHR 147 bpm, HRmax 173 bpm)을 반환한다.
     """
     default_ftp = 194.0
+    default_lthr = 147.0
     default_max_hr = 173.0
 
     env_ftp = os.getenv("FTP_WATTS", "").strip()
+    env_lthr = os.getenv("LTHR_BPM", "").strip()
     env_max_hr = os.getenv("MAX_HR", "").strip()
 
     try:
@@ -48,19 +51,26 @@ def _load_env_baseline() -> Tuple[float, float]:
         resolved_ftp = default_ftp
 
     try:
+        resolved_lthr = float(env_lthr) if env_lthr else default_lthr
+    except Exception:
+        resolved_lthr = default_lthr
+
+    try:
         resolved_max_hr = float(env_max_hr) if env_max_hr else default_max_hr
     except Exception:
         resolved_max_hr = default_max_hr
 
     if resolved_ftp <= 0:
         resolved_ftp = default_ftp
+    if resolved_lthr <= 0:
+        resolved_lthr = default_lthr
     if resolved_max_hr <= 0:
         resolved_max_hr = default_max_hr
 
-    return resolved_ftp, resolved_max_hr
+    return resolved_ftp, resolved_lthr, resolved_max_hr
 
 
-FTP_WATTS, MAX_HR = _load_env_baseline()
+FTP_WATTS, LTHR_BPM, MAX_HR = _load_env_baseline()
 
 SEMICIRCLE_TO_DEG = 180.0 / (2**31)
 
@@ -148,6 +158,7 @@ def _compute_decoupling(power_arr: np.ndarray, hr_arr: np.ndarray) -> Optional[f
 
 
 def _zone_times_minutes(power_filled: np.ndarray, ftp: float) -> Dict[str, float]:
+    """공식 FTP 기준 Coggan 파워 5존 체류 시간(분)"""
     if len(power_filled) == 0 or ftp <= 0:
         return {"Z1": 0.0, "Z2": 0.0, "Z3": 0.0, "Z4": 0.0, "Z5": 0.0}
     ratio = power_filled / ftp
@@ -156,6 +167,38 @@ def _zone_times_minutes(power_filled: np.ndarray, ftp: float) -> Dict[str, float
     z3 = int(np.sum((ratio >= 0.76) & (ratio < 0.91)))
     z4 = int(np.sum((ratio >= 0.91) & (ratio < 1.06)))
     z5 = int(np.sum(ratio >= 1.06))
+    return {
+        "Z1": round(z1 / 60.0, 1),
+        "Z2": round(z2 / 60.0, 1),
+        "Z3": round(z3 / 60.0, 1),
+        "Z4": round(z4 / 60.0, 1),
+        "Z5": round(z5 / 60.0, 1),
+    }
+
+
+def _hr_zone_times_minutes(hr_arr: np.ndarray, lthr: float) -> Dict[str, float]:
+    """
+    젖산역치 심박(LTHR, 기본 147 bpm) 기반 Joe Friel 5존 심박 체류 시간(분)
+    - Z1: < 81% LTHR (< 119 bpm)
+    - Z2: 81% ~ < 90% LTHR (119 ~ 131 bpm)
+    - Z3: 90% ~ < 94% LTHR (132 ~ 137 bpm)
+    - Z4: 94% ~ < 100% LTHR (138 ~ 146 bpm)
+    - Z5: >= 100% LTHR (147 ~ 173 bpm)
+    """
+    valid_hr = hr_arr[np.isfinite(hr_arr) & (hr_arr > 0)]
+    if len(valid_hr) == 0 or lthr <= 0:
+        return {"Z1": 0.0, "Z2": 0.0, "Z3": 0.0, "Z4": 0.0, "Z5": 0.0}
+
+    z1_cut = round(lthr * 0.81)  # 119 bpm @ LTHR 147
+    z2_cut = round(lthr * 0.90)  # 132 bpm @ LTHR 147
+    z3_cut = round(lthr * 0.94)  # 138 bpm @ LTHR 147
+    z4_cut = round(lthr * 1.00)  # 147 bpm @ LTHR 147
+
+    z1 = int(np.sum(valid_hr < z1_cut))
+    z2 = int(np.sum((valid_hr >= z1_cut) & (valid_hr < z2_cut)))
+    z3 = int(np.sum((valid_hr >= z2_cut) & (valid_hr < z3_cut)))
+    z4 = int(np.sum((valid_hr >= z3_cut) & (valid_hr < z4_cut)))
+    z5 = int(np.sum(valid_hr >= z4_cut))
     return {
         "Z1": round(z1 / 60.0, 1),
         "Z2": round(z2 / 60.0, 1),
@@ -406,10 +449,14 @@ def _detect_workout_blocks(
     return blocks
 
 
-def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tuple[str, Dict[str, Any]]:
+def build_summary(
+    fit_path: Optional[Path] = None,
+    ftp: float = FTP_WATTS,
+    lthr: float = LTHR_BPM,
+) -> Tuple[str, Dict[str, Any]]:
     df, resolved_path, meta = _load_latest_stream(fit_path)
     if df is None or len(df) == 0 or resolved_path is None:
-        msg = "[WARN] 분석할 1초 FIT 시계열 데이터가 없습니다."
+        msg = "WARN 분석할 1초 FIT 시계열 데이터가 없습니다."
         return msg, {}
 
     power_raw = df["power"].to_numpy(dtype=float)
@@ -444,6 +491,7 @@ def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tu
 
     decoupling = _compute_decoupling(power_raw, hr_raw)
     zones = _zone_times_minutes(p_filled, ftp)
+    hr_zones = _hr_zone_times_minutes(hr_raw, lthr)
 
     blocks = _detect_workout_blocks(power_raw, hr_raw, cad_raw, ftp)
     work_blocks = [b for b in blocks if b.block_type == "WORK"]
@@ -464,7 +512,9 @@ def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tu
         + (f" / 세션 eFTP 참고 {session_eftp}W" if session_eftp is not None else "")
     )
     lines.append(
-        f"3. 존체류 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / "
+        f"3. 파워존체류 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / "
+        f"심박존체류 LTHR {int(lthr)}bpm 기준 분 HRZ1 {hr_zones['Z1']} / HRZ2 {hr_zones['Z2']} / "
+        f"HRZ3 {hr_zones['Z3']} / HRZ4 {hr_zones['Z4']} / HRZ5 {hr_zones['Z5']} / "
         f"평균심박 {avg_hr if avg_hr is not None else 'NA'}bpm 최대 {max_hr_val if max_hr_val is not None else 'NA'}bpm / "
         f"평균케이던스 {avg_cad if avg_cad is not None else 'NA'}rpm / 디커플링 {decoupling if decoupling is not None else 'NA'}%"
     )
@@ -536,6 +586,11 @@ def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tu
         "session_eftp_ref": session_eftp,
         "avg_hr": avg_hr,
         "max_hr": max_hr_val,
+        "hr_z1_min": hr_zones["Z1"],
+        "hr_z2_min": hr_zones["Z2"],
+        "hr_z3_min": hr_zones["Z3"],
+        "hr_z4_min": hr_zones["Z4"],
+        "hr_z5_min": hr_zones["Z5"],
         "avg_cadence": avg_cad,
         "decoupling_pct": decoupling,
         "block_count": len(blocks),
@@ -546,7 +601,7 @@ def build_summary(fit_path: Optional[Path] = None, ftp: float = FTP_WATTS) -> Tu
 
 
 def main() -> None:
-    summary_text, summary_row = build_summary(ftp=FTP_WATTS)
+    summary_text, summary_row = build_summary(ftp=FTP_WATTS, lthr=LTHR_BPM)
     OUT_TXT.write_text(summary_text, encoding="utf-8")
     if summary_row:
         pd.DataFrame([summary_row]).to_csv(
