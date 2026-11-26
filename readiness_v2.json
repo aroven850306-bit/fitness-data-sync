@@ -1,6 +1,6 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-26 18:39:12",
+  "as_of_kst": "2026-11-26 19:46:47",
   "score": 91.2,
   "score_range": [
     91.2,
@@ -11,7 +11,7 @@
   "permission_grade": "B",
   "permission_label": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
   "gate_reasons": [
-    "Body Battery 29 (30 이하)"
+    "Body Battery 20 (30 이하)"
   ],
   "breakdown": {
     "training_balance": {
@@ -36,7 +36,7 @@
       "score": 15.0,
       "max": 15.0,
       "label": "남은 0.0h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 23.7h · IF×TSS 22.1(권장 17.9h)"
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 24.8h · IF×TSS 22.1(권장 17.9h)"
     },
     "resting_hr": {
       "score": 15.0,
