@@ -1,0 +1,17 @@
+{
+"schema_version": "1.0",
+"updated_at": "2026-11-26",
+"official_ftp_watts": 194.0,
+"official_lthr_bpm": 147.0,
+"max_hr_bpm": 173,
+"target_ftp_watts": 240.0,
+"current_weight_kg": 77.4,
+"target_weight_kg": 72.0,
+"vo2_max_baseline": 45,
+"mmp_5m_baseline_watts": 255.0,
+"z2_efficiency_power_watts": 118.0,
+"ftp_test_date": "2026-12-06",
+"event_date": "2027-04-03",
+"event_name": "고성공룡나라그란폰도 B코스",
+"notes": "후보 eFTP/eLTHR 감지 시 즉시 덮어쓰지 않고 검증 확정 후 갱신"
+}
