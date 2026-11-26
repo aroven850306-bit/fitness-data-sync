@@ -99,7 +99,8 @@ def main():
         ('garmin_activities.csv', 'garmin_activities'),
         ('garmin_health.csv', 'garmin_health'),
         ('strava_activities.csv', 'strava_activities'),
-        ('readiness_v2_summary.csv', 'readiness_v2_summary'),
+        ('readiness_v2_summary.csv', 'readiness_v2_summary')
+        ('strava_segments.csv', 'strava_segments'),
     ]
     for csv_file, sheet_name in csv_targets:
         update_google_sheet_from_csv(csv_file, sheet_name)
