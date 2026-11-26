@@ -1,2 +1,2 @@
 ﻿"engine_version","as_of_kst","score","score_range_min","score_range_max","confidence","completeness_pct","permission_grade","permission_label","ctl_42d","atl_7d","tsb_used","acwr_used","gate_reasons","notes"
-"v2","2026-11-26 20:45:52","91.2","91.2","91.2","높음","100.0","B","B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)","21.7","28.1","-6.4","1.29","Body Battery 20 (30 이하)",""
+"v2","2026-11-26 21:55:03","74.8","74.8","74.8","높음","100.0","C","C · 존2 전환 (고강도 제외·Z1~Z2 대체)","23.5","38.9","-15.4","1.66","준비도 74.8점 (60~79) | Body Battery 20 (30 이하) | ACWR 1.66 (1.5 이상) | 복합 피로 경고 2건 동시 발생 (존2 전환)",""
