@@ -1,5 +1,5 @@
 {
-"schema_version": "1.0",
+"schema_version": "1.1",
 "updated_at": "2026-11-26",
 "official_ftp_watts": 194.0,
 "official_lthr_bpm": 147.0,
@@ -13,5 +13,6 @@
 "ftp_test_date": "2026-12-06",
 "event_date": "2027-04-03",
 "event_name": "고성공룡나라그란폰도 B코스",
+"last_update_reason": "2026-11-26 기준선 파일 정비",
 "notes": "후보 eFTP/eLTHR 감지 시 즉시 덮어쓰지 않고 검증 확정 후 갱신"
 }
