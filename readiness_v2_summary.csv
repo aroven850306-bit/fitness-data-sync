@@ -1,2 +1,2 @@
 ﻿"engine_version","as_of_kst","score","score_range_min","score_range_max","confidence","completeness_pct","permission_grade","permission_label","gate_reasons","notes"
-"v2","2026-11-26 14:05:03","","55.3","95.3","보통","66.7","A","A · 계획대로 진행","","training_balance 미확정(TSB 데이터 없음(0점 미적용)) | recovery_time 미확정(남은 회복시간 미확인(0점 미적용))"
+"v2","2026-11-26 14:18:06","","55.3","95.3","보통","66.7","A","A · 계획대로 진행","","training_balance 미확정(TSB 데이터 없음(0점 미적용)) | recovery_time 미확정(남은 회복시간 미확인(0점 미적용))"
