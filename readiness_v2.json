@@ -1,0 +1,56 @@
+{
+  "engine_version": "v2",
+  "as_of_kst": "2026-11-26 14:05:03",
+  "score": null,
+  "score_range": [
+    55.3,
+    95.3
+  ],
+  "confidence": "보통",
+  "completeness_pct": 66.7,
+  "permission_grade": "A",
+  "permission_label": "A · 계획대로 진행",
+  "gate_reasons": [],
+  "breakdown": {
+    "training_balance": {
+      "score": null,
+      "max": 25.0,
+      "label": "확인 못 함",
+      "detail": "TSB 데이터 없음(0점 미적용)"
+    },
+    "sleep_recovery": {
+      "score": 17.3,
+      "max": 20.0,
+      "label": "6.38h",
+      "detail": "수면점수 76점 · 3일부채 1.9h(3일합 19.1h)"
+    },
+    "hrv_trend": {
+      "score": 15.0,
+      "max": 15.0,
+      "label": "33ms · 기준 범위 내 안정",
+      "detail": "기준 27.0-33.0ms (7일 평균 대비 +7.4%)"
+    },
+    "recovery_time": {
+      "score": null,
+      "max": 15.0,
+      "label": "확인 못 함",
+      "detail": "남은 회복시간 미확인(0점 미적용)"
+    },
+    "resting_hr": {
+      "score": 15.0,
+      "max": 15.0,
+      "label": "48 bpm",
+      "detail": "7일 평균 50.7bpm 대비 -2.7bpm"
+    },
+    "stress_activity": {
+      "score": 8.0,
+      "max": 10.0,
+      "label": "스트레스 29",
+      "detail": "7일 평균 33.0"
+    }
+  },
+  "notes": [
+    "training_balance 미확정(TSB 데이터 없음(0점 미적용))",
+    "recovery_time 미확정(남은 회복시간 미확인(0점 미적용))"
+  ]
+}
