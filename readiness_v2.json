@@ -1,27 +1,25 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-26 23:06:31",
-  "score": 74.8,
+  "as_of_kst": "2026-11-27 00:27:40",
+  "score": 76.8,
   "score_range": [
-    74.8,
-    74.8
+    76.8,
+    76.8
   ],
   "confidence": "높음",
   "completeness_pct": 100.0,
-  "permission_grade": "C",
-  "permission_label": "C · 존2 전환 (고강도 제외·Z1~Z2 대체)",
+  "permission_grade": "B",
+  "permission_label": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
   "gate_reasons": [
-    "준비도 74.8점 (60~79)",
-    "Body Battery 12 (30 이하)",
-    "ACWR 1.66 (1.5 이상)",
-    "복합 피로 경고 2건 동시 발생 (존2 전환)"
+    "준비도 76.8점 (60~79)",
+    "Body Battery 12 (30 이하)"
   ],
   "breakdown": {
     "training_balance": {
-      "score": 19.5,
+      "score": 21.5,
       "max": 25.0,
-      "label": "적정 훈련 구간 · ACWR 1.66",
-      "detail": "TSB -15.4, ACWR 1.66"
+      "label": "적정 훈련 구간",
+      "detail": "TSB -10.4, ACWR 1.46"
     },
     "sleep_recovery": {
       "score": 17.3,
@@ -38,8 +36,8 @@
     "recovery_time": {
       "score": 0.0,
       "max": 15.0,
-      "label": "남은 31.9h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 4.1h · IF×TSS 66.0(권장 36.0h)"
+      "label": "남은 30.5h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 5.5h · IF×TSS 66.0(권장 36.0h)"
     },
     "resting_hr": {
       "score": 15.0,
@@ -56,10 +54,10 @@
   },
   "notes": [],
   "derived_load_context": {
-    "ctl_42d": 23.5,
-    "atl_7d": 38.9,
-    "tsb": -15.4,
-    "acwr": 1.66,
+    "ctl_42d": 22.9,
+    "atl_7d": 33.3,
+    "tsb": -10.4,
+    "acwr": 1.46,
     "source": "fit_analysis_report_ewma"
   }
 }
