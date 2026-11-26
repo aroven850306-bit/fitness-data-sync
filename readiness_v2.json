@@ -1,6 +1,6 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-26 21:55:03",
+  "as_of_kst": "2026-11-26 23:06:31",
   "score": 74.8,
   "score_range": [
     74.8,
@@ -12,7 +12,7 @@
   "permission_label": "C · 존2 전환 (고강도 제외·Z1~Z2 대체)",
   "gate_reasons": [
     "준비도 74.8점 (60~79)",
-    "Body Battery 20 (30 이하)",
+    "Body Battery 12 (30 이하)",
     "ACWR 1.66 (1.5 이상)",
     "복합 피로 경고 2건 동시 발생 (존2 전환)"
   ],
@@ -38,8 +38,8 @@
     "recovery_time": {
       "score": 0.0,
       "max": 15.0,
-      "label": "남은 33.1h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 2.9h · IF×TSS 66.0(권장 36.0h)"
+      "label": "남은 31.9h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 4.1h · IF×TSS 66.0(권장 36.0h)"
     },
     "resting_hr": {
       "score": 15.0,
@@ -50,8 +50,8 @@
     "stress_activity": {
       "score": 8.0,
       "max": 10.0,
-      "label": "스트레스 32",
-      "detail": "7일 평균 33.4"
+      "label": "스트레스 33",
+      "detail": "7일 평균 33.6"
     }
   },
   "notes": [],
