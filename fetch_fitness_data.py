@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Garmin Connect + Strava 데이터 수집 스크립트 (운영 정리 버전)
+Garmin Connect + Strava 데이터 수집 스크립트 (운영 정리 및 Strava 확장 통합 버전)
 - 루트 디렉토리(./)에 CSV 및 fit_files/ 저장
 - Garmin 세션 토큰(JSON/파일/디렉토리) 우선 복원 + 이메일/비밀번호 로그인 fallback (429 회피 지원)
 - 가민 웰니스 + Training Readiness / Training Load / ACWR 수집
 - 바디배터리 현재 잔량(body_battery_current) 실측값 안전 추출 (없으면 None으로 유지)
+- Strava 확장 수집:
+  1) 활동 상세 조회(RPE perceived_exertion, 칼로리, 트레이너 여부, 최대 속도)
+  2) 세그먼트 PR / 업힐 기록(strava_segments.csv 별도 누적 저장 및 활동별 요약 병합)
+  3) Strava 파워·심박 존 분포(zones) 및 야외 라이딩 경사도 구간별 파워(평지/완경사/업힐) 집계
 - 기존 CSV의 유효 값 보존 안전 병합
 """
 
@@ -16,8 +20,9 @@ import time
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -40,9 +45,12 @@ STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "").strip()
 STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "").strip()
 STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "").strip()
 
-FTP_WATTS = float(os.getenv("FTP_WATTS", "195"))
+# 공식 확정 기준 FTP 194W (환경변수 FTP_WATTS로 오버라이드 가능)
+FTP_WATTS = float(os.getenv("FTP_WATTS", "194"))
 WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
 ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
+# Strava 상세/존/스트림 API 호출 대상 최신 미수집 활동 수 (15분 100회 제한 보호)
+STRAVA_DETAIL_LIMIT = int(os.getenv("STRAVA_DETAIL_LIMIT", "15"))
 
 
 def _find_first_value(data: Any, candidate_keys: Iterable[str]) -> Any:
@@ -74,6 +82,8 @@ def _to_float(val: Any, ndigits: Optional[int] = 2) -> Optional[float]:
         return None
     try:
         num = float(val)
+        if not np.isfinite(num):
+            return None
         if ndigits == 0:
             return int(round(num))
         if ndigits is not None:
@@ -409,7 +419,7 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
 
 
 def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFrame:
-    """가민 웰니스 + Training Readiness / Training Load / ACWR 수집"""
+    """가민 웰니스 + Training Readiness / Training Load / ACWR + 바디배터리 현재 잔량 수집"""
     csv_path = DATA_DIR / "garmin_health.csv"
     existing_df = pd.read_csv(csv_path) if csv_path.exists() else pd.DataFrame()
 
@@ -440,7 +450,7 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             bb_low = stats.get("bodyBatteryLowestValue")
             bb_current = _find_first_value(
                 stats,
-                ["bodyBatteryCurrentValue", "currentBodyBattery", "bodyBatteryLatestValue"],
+                ["bodyBatteryMostRecentValue", "bodyBatteryCurrentValue", "currentBodyBattery", "bodyBatteryLatestValue"],
             )
             steps = stats.get("totalSteps")
         except Exception:
@@ -552,14 +562,250 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
     return combined
 
 
-def fetch_strava_activities(per_page: int = 100) -> pd.DataFrame:
-    """Strava API에서 활동 이력 수집 및 누적 저장"""
+# ==============================================================================
+# Strava 확장 수집 헬퍼 (세그먼트 PR/업힐 기록, 경사도별 파워, 존 데이터, RPE)
+# ==============================================================================
+
+def _strava_get(
+    url: str,
+    headers: Dict[str, str],
+    params: Optional[Dict[str, Any]] = None,
+    timeout: int = 20,
+) -> Optional[Any]:
+    """Strava API GET 요청 래퍼 (429 Rate Limit 및 권한/미존재 오류 안전 처리)"""
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+        if resp.status_code == 429:
+            print("[WARN] Strava API Rate Limit(429) 도달 — 추가 상세 조회를 일시 중단합니다.", flush=True)
+            return None
+        if resp.status_code in (401, 403, 404):
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[WARN] Strava GET 실패 ({url}): {e}", flush=True)
+        return None
+
+
+def _parse_strava_zones(zones_payload: Any) -> Dict[str, Any]:
+    """Strava /activities/{id}/zones 응답에서 파워 존(Z1~Z5+) 및 심박 존(HRZ1~HRZ5) 체류 시간(분) 추출"""
+    out: Dict[str, Any] = {
+        "strava_pz1_min": None,
+        "strava_pz2_min": None,
+        "strava_pz3_min": None,
+        "strava_pz4_min": None,
+        "strava_pz5_plus_min": None,
+        "strava_hrz1_min": None,
+        "strava_hrz2_min": None,
+        "strava_hrz3_min": None,
+        "strava_hrz4_min": None,
+        "strava_hrz5_min": None,
+    }
+    if not isinstance(zones_payload, list):
+        return out
+
+    for z_group in zones_payload:
+        if not isinstance(z_group, dict):
+            continue
+        z_type = str(z_group.get("type", "")).lower()
+        buckets = z_group.get("distribution_buckets") or []
+        if not buckets:
+            continue
+
+        mins = [round((float(b.get("time") or 0)) / 60.0, 1) for b in buckets]
+        if z_type == "power":
+            if len(mins) >= 1:
+                out["strava_pz1_min"] = mins[0]
+            if len(mins) >= 2:
+                out["strava_pz2_min"] = mins[1]
+            if len(mins) >= 3:
+                out["strava_pz3_min"] = mins[2]
+            if len(mins) >= 4:
+                out["strava_pz4_min"] = mins[3]
+            if len(mins) >= 5:
+                out["strava_pz5_plus_min"] = round(sum(mins[4:]), 1)
+        elif z_type == "heartrate":
+            if len(mins) >= 1:
+                out["strava_hrz1_min"] = mins[0]
+            if len(mins) >= 2:
+                out["strava_hrz2_min"] = mins[1]
+            if len(mins) >= 3:
+                out["strava_hrz3_min"] = mins[2]
+            if len(mins) >= 4:
+                out["strava_hrz4_min"] = mins[3]
+            if len(mins) >= 5:
+                out["strava_hrz5_min"] = round(sum(mins[4:]), 1)
+
+    return out
+
+
+def _compute_grade_power_metrics(streams_payload: Any) -> Dict[str, Any]:
+    """
+    Strava /activities/{id}/streams (watts, grade_smooth, moving)에서
+    경사도 구간별 평균 파워(평지 <2%, 완경사 2~5%, 업힐 >=5%) 및 최대 경사도 산출
+    """
+    out: Dict[str, Any] = {
+        "max_grade_pct": None,
+        "flat_avg_watts": None,        # 경사도 < 2.0%
+        "false_flat_avg_watts": None,  # 경사도 2.0% ~ < 5.0%
+        "climb_avg_watts": None,       # 경사도 >= 5.0%
+        "climb_time_min": None,        # 경사도 >= 5.0% 누적 시간(분)
+    }
+    if not isinstance(streams_payload, dict):
+        return out
+
+    watts_data = (streams_payload.get("watts") or {}).get("data")
+    grade_data = (streams_payload.get("grade_smooth") or {}).get("data")
+    moving_data = (streams_payload.get("moving") or {}).get("data")
+
+    if not watts_data or not grade_data:
+        return out
+
+    n = min(len(watts_data), len(grade_data))
+    if n < 30:
+        return out
+
+    w_arr = np.array([float(v) if v is not None else np.nan for v in watts_data[:n]], dtype=float)
+    g_arr = np.array([float(v) if v is not None else np.nan for v in grade_data[:n]], dtype=float)
+
+    if moving_data and len(moving_data) >= n:
+        m_arr = np.array([bool(v) for v in moving_data[:n]], dtype=bool)
+    else:
+        m_arr = np.ones(n, dtype=bool)
+
+    valid = np.isfinite(w_arr) & np.isfinite(g_arr) & m_arr & (w_arr > 0)
+    if int(np.sum(valid)) < 20:
+        return out
+
+    g_valid = g_arr[valid]
+    w_valid = w_arr[valid]
+
+    sane = (g_valid >= -35.0) & (g_valid <= 35.0)
+    if int(np.sum(sane)) < 20:
+        return out
+
+    g_sane = g_valid[sane]
+    w_sane = w_valid[sane]
+
+    out["max_grade_pct"] = round(float(np.max(g_sane)), 1)
+
+    flat_mask = (g_sane >= -2.0) & (g_sane < 2.0)
+    mod_mask = (g_sane >= 2.0) & (g_sane < 5.0)
+    climb_mask = g_sane >= 5.0
+
+    if int(np.sum(flat_mask)) >= 15:
+        out["flat_avg_watts"] = round(float(np.mean(w_sane[flat_mask])), 1)
+    if int(np.sum(mod_mask)) >= 15:
+        out["false_flat_avg_watts"] = round(float(np.mean(w_sane[mod_mask])), 1)
+    if int(np.sum(climb_mask)) >= 10:
+        out["climb_avg_watts"] = round(float(np.mean(w_sane[climb_mask])), 1)
+        out["climb_time_min"] = round(float(np.sum(climb_mask)) / 60.0, 1)
+
+    return out
+
+
+def _extract_segment_efforts(
+    activity_id: int,
+    activity_date: str,
+    activity_name: str,
+    detail_payload: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Strava 상세 활동의 segment_efforts에서 세그먼트 PR/업힐 기록 추출"""
+    efforts = detail_payload.get("segment_efforts") or []
+    seg_rows: List[Dict[str, Any]] = []
+    pr_names: List[str] = []
+    best_climb_summary: Optional[str] = None
+    best_climb_score = -1.0
+
+    for eff in efforts:
+        if not isinstance(eff, dict):
+            continue
+        seg = eff.get("segment") or {}
+        effort_id = eff.get("id")
+        if effort_id is None:
+            continue
+
+        seg_name = str(eff.get("name") or seg.get("name") or "")
+        dist_m = float(eff.get("distance") or seg.get("distance") or 0.0)
+        elapsed_sec = int(eff.get("elapsed_time") or 0)
+        moving_sec = int(eff.get("moving_time") or elapsed_sec)
+        avg_grade = _to_float(seg.get("average_grade"), ndigits=1)
+        max_grade = _to_float(seg.get("maximum_grade"), ndigits=1)
+        elev_high = _to_float(seg.get("elevation_high"), ndigits=1)
+        elev_low = _to_float(seg.get("elevation_low"), ndigits=1)
+        elev_diff = round(elev_high - elev_low, 1) if (elev_high is not None and elev_low is not None) else None
+        climb_cat = seg.get("climb_category")
+        avg_watts = _to_float(eff.get("average_watts"), ndigits=1)
+        avg_hr = _to_float(eff.get("average_heartrate"), ndigits=1)
+        max_hr = _to_float(eff.get("max_heartrate"), ndigits=0)
+        avg_cad = _to_float(eff.get("average_cadence"), ndigits=1)
+        pr_rank = eff.get("pr_rank")
+        kom_rank = eff.get("kom_rank")
+
+        is_pr = pr_rank == 1
+        if is_pr and seg_name:
+            pr_names.append(seg_name)
+
+        is_climb = bool((avg_grade is not None and avg_grade >= 3.0) or (climb_cat and int(climb_cat) >= 1))
+        if is_climb and elapsed_sec > 0:
+            score = dist_m * max(avg_grade or 1.0, 1.0)
+            if score > best_climb_score:
+                best_climb_score = score
+                w_str = f" · {avg_watts}W" if avg_watts is not None else ""
+                best_climb_summary = f"{seg_name} ({round(dist_m/1000, 2)}km/{avg_grade}% · {elapsed_sec}s{w_str})"
+
+        seg_rows.append(
+            {
+                "effort_id": int(effort_id),
+                "activity_id": int(activity_id),
+                "date": activity_date,
+                "activity_name": activity_name,
+                "segment_id": seg.get("id"),
+                "segment_name": seg_name,
+                "distance_km": round(dist_m / 1000.0, 2),
+                "elapsed_time_sec": elapsed_sec,
+                "moving_time_sec": moving_sec,
+                "avg_grade_pct": avg_grade,
+                "max_grade_pct": max_grade,
+                "elev_gain_m": elev_diff,
+                "climb_category": climb_cat,
+                "avg_watts": avg_watts,
+                "avg_hr": avg_hr,
+                "max_hr": max_hr,
+                "avg_cadence": avg_cad,
+                "pr_rank": pr_rank,
+                "kom_rank": kom_rank,
+                "is_pr": is_pr,
+            }
+        )
+
+    summary_cols = {
+        "segment_count": len(seg_rows),
+        "segment_pr_count": len(pr_names),
+        "segment_pr_names": " | ".join(pr_names) if pr_names else None,
+        "key_climb_segment": best_climb_summary,
+    }
+    return seg_rows, summary_cols
+
+
+def fetch_strava_activities(
+    per_page: int = 100,
+    detail_limit: int = STRAVA_DETAIL_LIMIT,
+) -> pd.DataFrame:
+    """Strava API에서 활동 이력 + 확장 지표(RPE, 세그먼트 PR/업힐, 경사도별 파워, 존 데이터) 수집 및 누적 저장"""
     if not (STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET and STRAVA_REFRESH_TOKEN):
         print("[INFO] Strava 환경변수가 설정되지 않아 Strava 수집을 건너뜁니다.", flush=True)
         return pd.DataFrame()
 
     csv_path = DATA_DIR / "strava_activities.csv"
+    seg_csv_path = DATA_DIR / "strava_segments.csv"
     existing_df = pd.read_csv(csv_path) if csv_path.exists() else pd.DataFrame()
+    existing_seg_df = pd.read_csv(seg_csv_path) if seg_csv_path.exists() else pd.DataFrame()
+
+    existing_ids_with_detail = set()
+    if not existing_df.empty and "detail_synced" in existing_df.columns:
+        synced_rows = existing_df[existing_df["detail_synced"] == True]  # noqa: E712
+        existing_ids_with_detail = set(synced_rows["id"].astype(str).tolist())
 
     token_resp = requests.post(
         "https://www.strava.com/oauth/token",
@@ -573,40 +819,124 @@ def fetch_strava_activities(per_page: int = 100) -> pd.DataFrame:
     )
     token_resp.raise_for_status()
     access_token = token_resp.json()["access_token"]
+    auth_headers = {"Authorization": f"Bearer {access_token}"}
 
     act_resp = requests.get(
         "https://www.strava.com/api/v3/athlete/activities",
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers=auth_headers,
         params={"per_page": per_page, "page": 1},
         timeout=20,
     )
     act_resp.raise_for_status()
     items = act_resp.json()
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
+    all_segment_rows: List[Dict[str, Any]] = []
+    detail_fetched_count = 0
+
     for it in items:
         if it.get("type") not in ("Ride", "VirtualRide"):
             continue
-        rows.append(
-            {
-                "id": int(it["id"]),
-                "date": it.get("start_date_local"),
-                "name": it.get("name"),
-                "type": it.get("type"),
-                "distance_km": round((it.get("distance") or 0) / 1000, 2),
-                "moving_time_min": round((it.get("moving_time") or 0) / 60, 1),
-                "elevation_gain_m": round(it.get("total_elevation_gain") or 0, 1),
-                "avg_speed_kph": round((it.get("average_speed") or 0) * 3.6, 1),
-                "avg_watts": it.get("average_watts"),
-                "weighted_avg_watts_NP": it.get("weighted_average_watts"),
-                "max_watts": it.get("max_watts"),
-                "kilojoules": it.get("kilojoules"),
-                "avg_cadence": it.get("average_cadence"),
-                "avg_hr": it.get("average_heartrate"),
-                "max_hr": it.get("max_heartrate"),
-                "suffer_score": it.get("suffer_score"),
-            }
-        )
+
+        act_id = int(it["id"])
+        act_date = str(it.get("start_date_local") or "")
+        act_name = str(it.get("name") or "")
+        is_trainer = bool(it.get("trainer"))
+
+        row: Dict[str, Any] = {
+            "id": act_id,
+            "date": act_date,
+            "name": act_name,
+            "type": it.get("type"),
+            "trainer": is_trainer,
+            "distance_km": round((it.get("distance") or 0) / 1000, 2),
+            "moving_time_min": round((it.get("moving_time") or 0) / 60, 1),
+            "elevation_gain_m": round(it.get("total_elevation_gain") or 0, 1),
+            "avg_speed_kph": round((it.get("average_speed") or 0) * 3.6, 1),
+            "max_speed_kph": round((it.get("max_speed") or 0) * 3.6, 1) if it.get("max_speed") else None,
+            "avg_watts": it.get("average_watts"),
+            "weighted_avg_watts_NP": it.get("weighted_average_watts"),
+            "max_watts": it.get("max_watts"),
+            "kilojoules": it.get("kilojoules"),
+            "calories_kcal": it.get("calories"),
+            "avg_cadence": it.get("average_cadence"),
+            "avg_hr": it.get("average_heartrate"),
+            "max_hr": it.get("max_heartrate"),
+            "suffer_score": it.get("suffer_score"),
+            "perceived_exertion_rpe": it.get("perceived_exertion"),
+            "segment_count": None,
+            "segment_pr_count": None,
+            "segment_pr_names": None,
+            "key_climb_segment": None,
+            "max_grade_pct": None,
+            "flat_avg_watts": None,
+            "false_flat_avg_watts": None,
+            "climb_avg_watts": None,
+            "climb_time_min": None,
+            "strava_pz1_min": None,
+            "strava_pz2_min": None,
+            "strava_pz3_min": None,
+            "strava_pz4_min": None,
+            "strava_pz5_plus_min": None,
+            "strava_hrz1_min": None,
+            "strava_hrz2_min": None,
+            "strava_hrz3_min": None,
+            "strava_hrz4_min": None,
+            "strava_hrz5_min": None,
+            "detail_synced": False,
+        }
+
+        need_detail = (str(act_id) not in existing_ids_with_detail) and (detail_fetched_count < detail_limit)
+        if need_detail:
+            detail_data = _strava_get(
+                f"https://www.strava.com/api/v3/activities/{act_id}",
+                headers=auth_headers,
+                params={"include_all_efforts": "true"},
+            )
+            if isinstance(detail_data, dict):
+                detail_fetched_count += 1
+                row["detail_synced"] = True
+
+                # 1) RPE (주관적 운동 자각도 1~10) & 칼로리 보완
+                if detail_data.get("perceived_exertion") is not None:
+                    row["perceived_exertion_rpe"] = _to_float(detail_data.get("perceived_exertion"), ndigits=1)
+                if detail_data.get("calories") is not None and row["calories_kcal"] is None:
+                    row["calories_kcal"] = _to_float(detail_data.get("calories"), ndigits=0)
+
+                # 2) 세그먼트 PR / 업힐 기록 추출
+                seg_rows, seg_summary = _extract_segment_efforts(
+                    activity_id=act_id,
+                    activity_date=act_date,
+                    activity_name=act_name,
+                    detail_payload=detail_data,
+                )
+                all_segment_rows.extend(seg_rows)
+                row.update(seg_summary)
+
+                # 3) Strava 파워/심박 존 분포 조회
+                zones_data = _strava_get(
+                    f"https://www.strava.com/api/v3/activities/{act_id}/zones",
+                    headers=auth_headers,
+                )
+                if zones_data is not None:
+                    row.update(_parse_strava_zones(zones_data))
+
+                # 4) 야외 라이딩 경사도 구간별 파워 스트림 분석
+                if not is_trainer and (it.get("total_elevation_gain") or 0) > 0:
+                    streams_data = _strava_get(
+                        f"https://www.strava.com/api/v3/activities/{act_id}/streams",
+                        headers=auth_headers,
+                        params={
+                            "keys": "watts,grade_smooth,moving",
+                            "key_by_type": "true",
+                        },
+                    )
+                    if streams_data is not None:
+                        row.update(_compute_grade_power_metrics(streams_data))
+
+                time.sleep(0.35)
+
+        rows.append(row)
 
     new_df = pd.DataFrame(rows)
     if not existing_df.empty and not new_df.empty:
@@ -617,6 +947,16 @@ def fetch_strava_activities(per_page: int = 100) -> pd.DataFrame:
     if not combined.empty:
         combined = combined.sort_values("date", ascending=False).reset_index(drop=True)
         combined.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    if all_segment_rows:
+        new_seg_df = pd.DataFrame(all_segment_rows)
+        if not existing_seg_df.empty:
+            combined_seg = _merge_prefer_non_null(existing_seg_df, new_seg_df, "effort_id")
+        else:
+            combined_seg = new_seg_df
+        combined_seg = combined_seg.sort_values(["date", "effort_id"], ascending=[False, True]).reset_index(drop=True)
+        combined_seg.to_csv(seg_csv_path, index=False, encoding="utf-8-sig")
+        print(f"[OK] Strava 세그먼트 기록: {len(combined_seg)}건 저장 완료 ({seg_csv_path.name})", flush=True)
 
     return combined
 
@@ -632,7 +972,7 @@ def main() -> None:
     health_df = fetch_garmin_health(garmin_client, days=WELLNESS_DAYS)
     print(f"[OK] Garmin 웰니스: {len(health_df)}일치 저장 완료", flush=True)
 
-    strava_df = fetch_strava_activities(per_page=100)
+    strava_df = fetch_strava_activities(per_page=100, detail_limit=STRAVA_DETAIL_LIMIT)
     if not strava_df.empty:
         print(f"[OK] Strava 활동: {len(strava_df)}건 저장 완료", flush=True)
 
