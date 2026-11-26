@@ -44,9 +44,49 @@ GARMIN_API_KEY = os.getenv("GARMIN_API_KEY", "").strip()
 STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "").strip()
 STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "").strip()
 STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "").strip()
+BASELINE_FILE = Path(os.getenv("PERFORMANCE_BASELINE_FILE", str(DATA_DIR / "performance_baseline.json")))
 
-# 공식 확정 기준 FTP 194W (환경변수 FTP_WATTS로 오버라이드 가능)
-FTP_WATTS = float(os.getenv("FTP_WATTS", "194"))
+
+def _load_performance_baseline() -> Tuple[float, float, float]:
+    """
+    기준 성능값(FTP, LTHR, HRmax)을 로드합니다.
+    우선순위: 환경변수(FTP_WATTS/LTHR_BPM/MAX_HR) -> performance_baseline.json -> 공식 확정 기본값(194W, 147bpm, 173bpm)
+    """
+    ftp_val: Optional[float] = None
+    lthr_val: Optional[float] = None
+    max_hr_val: Optional[float] = None
+
+    if BASELINE_FILE.exists():
+        try:
+            payload = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                ftp_val = _to_float(
+                    _find_first_value(payload, ["official_ftp_watts", "ftp_watts", "ftp"]),
+                    ndigits=1,
+                )
+                lthr_val = _to_float(
+                    _find_first_value(payload, ["official_lthr_bpm", "lthr_bpm", "lthr"]),
+                    ndigits=1,
+                )
+                max_hr_val = _to_float(
+                    _find_first_value(payload, ["max_hr_bpm", "max_hr", "hrmax"]),
+                    ndigits=0,
+                )
+        except Exception as e:
+            print(f"[WARN] 기준선 파일({BASELINE_FILE.name}) 파싱 실패: {e}", flush=True)
+
+    env_ftp = os.getenv("FTP_WATTS", "").strip()
+    env_lthr = os.getenv("LTHR_BPM", "").strip()
+    env_max_hr = os.getenv("MAX_HR", "").strip()
+
+    resolved_ftp = float(env_ftp) if env_ftp else (ftp_val if ftp_val is not None else 194.0)
+    resolved_lthr = float(env_lthr) if env_lthr else (lthr_val if lthr_val is not None else 147.0)
+    resolved_max_hr = float(env_max_hr) if env_max_hr else (max_hr_val if max_hr_val is not None else 173.0)
+    return resolved_ftp, resolved_lthr, resolved_max_hr
+
+
+# 공식 확정 기준치 자동 연동 (194W / 147bpm / 173bpm 기본값, 환경변수 및 baseline JSON 우선 반영)
+FTP_WATTS, LTHR_BPM, MAX_HR_BPM = _load_performance_baseline()
 WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
 ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
 # Strava 상세/존/스트림 API 호출 대상 최신 미수집 활동 수 (15분 100회 제한 보호)
@@ -962,7 +1002,10 @@ def fetch_strava_activities(
 
 
 def main() -> None:
-    print("=== Fitness 데이터 수집 시작 ===", flush=True)
+    print(
+        f"=== Fitness 데이터 수집 시작 (FTP={FTP_WATTS}W, LTHR={LTHR_BPM}bpm, HRmax={MAX_HR_BPM}bpm) ===",
+        flush=True,
+    )
     garmin_client = init_garmin()
 
     act_df = fetch_garmin_activities(garmin_client, limit=ACTIVITY_LIMIT)
