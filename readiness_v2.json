@@ -1,22 +1,22 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-26 14:18:06",
-  "score": null,
+  "as_of_kst": "2026-11-26 14:28:19",
+  "score": 91.2,
   "score_range": [
-    55.3,
-    95.3
+    91.2,
+    91.2
   ],
-  "confidence": "보통",
-  "completeness_pct": 66.7,
+  "confidence": "높음",
+  "completeness_pct": 100.0,
   "permission_grade": "A",
   "permission_label": "A · 계획대로 진행",
   "gate_reasons": [],
   "breakdown": {
     "training_balance": {
-      "score": null,
+      "score": 20.9,
       "max": 25.0,
-      "label": "확인 못 함",
-      "detail": "TSB 데이터 없음(0점 미적용)"
+      "label": "균형/회복 전환",
+      "detail": "TSB -6.4, ACWR 1.29"
     },
     "sleep_recovery": {
       "score": 17.3,
@@ -31,10 +31,10 @@
       "detail": "기준 27.0-33.0ms (7일 평균 대비 +7.4%)"
     },
     "recovery_time": {
-      "score": null,
+      "score": 15.0,
       "max": 15.0,
-      "label": "확인 못 함",
-      "detail": "남은 회복시간 미확인(0점 미적용)"
+      "label": "남은 0.0h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 19.5h · IF×TSS 22.1(권장 17.9h)"
     },
     "resting_hr": {
       "score": 15.0,
@@ -49,8 +49,12 @@
       "detail": "7일 평균 33.0"
     }
   },
-  "notes": [
-    "training_balance 미확정(TSB 데이터 없음(0점 미적용))",
-    "recovery_time 미확정(남은 회복시간 미확인(0점 미적용))"
-  ]
+  "notes": [],
+  "derived_load_context": {
+    "ctl_42d": 21.7,
+    "atl_7d": 28.1,
+    "tsb": -6.4,
+    "acwr": 1.29,
+    "source": "fit_analysis_report_ewma"
+  }
 }

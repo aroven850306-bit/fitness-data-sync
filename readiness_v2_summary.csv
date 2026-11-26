@@ -1,2 +1,2 @@
-﻿"engine_version","as_of_kst","score","score_range_min","score_range_max","confidence","completeness_pct","permission_grade","permission_label","gate_reasons","notes"
-"v2","2026-11-26 14:18:06","","55.3","95.3","보통","66.7","A","A · 계획대로 진행","","training_balance 미확정(TSB 데이터 없음(0점 미적용)) | recovery_time 미확정(남은 회복시간 미확인(0점 미적용))"
+﻿"engine_version","as_of_kst","score","score_range_min","score_range_max","confidence","completeness_pct","permission_grade","permission_label","ctl_42d","atl_7d","tsb_used","acwr_used","gate_reasons","notes"
+"v2","2026-11-26 14:28:19","91.2","91.2","91.2","높음","100.0","A","A · 계획대로 진행","21.7","28.1","-6.4","1.29","",""
