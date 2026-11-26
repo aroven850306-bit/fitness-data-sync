@@ -1,0 +1,4 @@
+﻿effort_id,activity_id,date,activity_name,segment_id,segment_name,distance_km,elapsed_time_sec,moving_time_sec,avg_grade_pct,max_grade_pct,elev_gain_m,climb_category,avg_watts,avg_hr,max_hr,avg_cadence,pr_rank,kom_rank,is_pr
+3554025697323225494,20890320651,2026-11-07T10:54:45Z,Morning Ride,39918858,아라깨비 로드 ( 모곡삼거리 to 신당터널 ) by Team Sunset,2.66,402,402,2.4,5.9,63.4,0,225.4,157.9,164,81.8,,,False
+3554025697326028182,20890320651,2026-11-07T10:54:45Z,Morning Ride,20943092,성산로 업힐,0.67,220,220,8.6,27.5,57.7,0,215.6,151.7,156,67.4,,,False
+3554025697326279062,20890320651,2026-11-07T10:54:45Z,Morning Ride,39918844,아라깨비 로드 ( 죽암 to 신당터널)  by Team Sunset,1.77,361,361,2.0,6.3,36.6,0,152.4,130.7,137,89.5,,,False
