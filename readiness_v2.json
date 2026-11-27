@@ -1,6 +1,6 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-27 09:10:18",
+  "as_of_kst": "2026-11-27 09:47:57",
   "score": 76.6,
   "score_range": [
     76.6,
@@ -18,7 +18,7 @@
       "score": 21.5,
       "max": 25.0,
       "label": "적정 훈련 구간",
-      "detail": "TSB -10.4, ACWR 1.46"
+      "detail": "TSB -10.2, ACWR 1.44"
     },
     "sleep_recovery": {
       "score": 17.1,
@@ -35,8 +35,8 @@
     "recovery_time": {
       "score": 0.0,
       "max": 15.0,
-      "label": "남은 21.8h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 14.2h · IF×TSS 66.0(권장 36.0h)"
+      "label": "남은 21.2h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 14.8h · IF×TSS 66.0(권장 36.0h)"
     },
     "resting_hr": {
       "score": 15.0,
@@ -53,10 +53,10 @@
   },
   "notes": [],
   "derived_load_context": {
-    "ctl_42d": 22.9,
-    "atl_7d": 33.3,
-    "tsb": -10.4,
-    "acwr": 1.46,
+    "ctl_42d": 23.3,
+    "atl_7d": 33.4,
+    "tsb": -10.2,
+    "acwr": 1.44,
     "source": "fit_analysis_report_ewma"
   }
 }
