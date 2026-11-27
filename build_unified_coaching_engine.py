@@ -1,5 +1,3 @@
-오류 없는 깔끔한 상태로 **`build_unified_coaching_engine.py` 전체 코드**를 다시 생성하겠습니다.
-
 ```python:통합 분석 엔진 파이썬 스크립트 (일·주·월·대회 전 4계층 판단):build_unified_coaching_engine.py
 #!/usr/bin/env python3
 """
