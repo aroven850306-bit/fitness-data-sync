@@ -1,6 +1,6 @@
 {
   "engine_version": "v2.6.1",
-  "generated_at_kst": "2026-11-28 05:30:43 KST",
+  "generated_at_kst": "2026-11-28 06:30:57 KST",
   "as_of_date": "2026-11-28",
   "baselines": {
     "official_ftp_watts": 194.0,
@@ -32,10 +32,10 @@
     "effective_grade": "B",
     "effective_score": 75.6,
     "is_hold_after_workout": false,
-    "sleep_debt_3d_hours": 8.2,
-    "hrv_today": null,
-    "hrv_7d_avg": 30.0,
-    "hrv_delta_pct": null,
+    "sleep_debt_3d_hours": 2.4,
+    "hrv_today": 29.0,
+    "hrv_7d_avg": 29.9,
+    "hrv_delta_pct": -3.0,
     "rhr_today": 54.0,
     "rhr_7d_avg": 51.7,
     "rhr_delta_bpm": 2.3,
