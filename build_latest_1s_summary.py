@@ -184,21 +184,34 @@ def _compute_decoupling(power_arr: np.ndarray, hr_arr: np.ndarray) -> Optional[f
 
 
 def _zone_times_minutes(power_filled: np.ndarray, ftp: float) -> Dict[str, float]:
-    """공식 FTP 기준 Coggan 파워 5존 체류 시간(분)"""
+    """
+    공식 FTP 기준 Coggan 파워 7존(Z1~Z7) 체류 시간(분)
+    - Z1: < 56% FTP (회복)
+    - Z2: 56% ~ < 76% FTP (지구력)
+    - Z3: 76% ~ < 91% FTP (템포)
+    - Z4: 91% ~ < 106% FTP (젖산역치)
+    - Z5: 106% ~ < 121% FTP (VO2max)
+    - Z6: 121% ~ < 151% FTP (무산소 용량)
+    - Z7: >= 151% FTP (신경근 파워)
+    """
     if len(power_filled) == 0 or ftp <= 0:
-        return {"Z1": 0.0, "Z2": 0.0, "Z3": 0.0, "Z4": 0.0, "Z5": 0.0}
+        return {"Z1": 0.0, "Z2": 0.0, "Z3": 0.0, "Z4": 0.0, "Z5": 0.0, "Z6": 0.0, "Z7": 0.0}
     ratio = power_filled / ftp
     z1 = int(np.sum(ratio < 0.56))
     z2 = int(np.sum((ratio >= 0.56) & (ratio < 0.76)))
     z3 = int(np.sum((ratio >= 0.76) & (ratio < 0.91)))
     z4 = int(np.sum((ratio >= 0.91) & (ratio < 1.06)))
-    z5 = int(np.sum(ratio >= 1.06))
+    z5 = int(np.sum((ratio >= 1.06) & (ratio < 1.21)))
+    z6 = int(np.sum((ratio >= 1.21) & (ratio < 1.51)))
+    z7 = int(np.sum(ratio >= 1.51))
     return {
         "Z1": round(z1 / 60.0, 1),
         "Z2": round(z2 / 60.0, 1),
         "Z3": round(z3 / 60.0, 1),
         "Z4": round(z4 / 60.0, 1),
         "Z5": round(z5 / 60.0, 1),
+        "Z6": round(z6 / 60.0, 1),
+        "Z7": round(z7 / 60.0, 1),
     }
 
 
@@ -576,8 +589,8 @@ def build_summary(
         + (" 후보FTP갱신검토" if ftp_candidate else "")
     )
     lines.append(
-        f"3. 파워존체류 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / "
-        f"심박존체류 LTHR {int(lthr)}bpm 기준 분 HRZ1 {hr_zones['Z1']} / HRZ2 {hr_zones['Z2']} / "
+        f"3. 파워존체류 7존 분 Z1 {zones['Z1']} / Z2 {zones['Z2']} / Z3 {zones['Z3']} / Z4 {zones['Z4']} / Z5 {zones['Z5']} / Z6 {zones['Z6']} / Z7 {zones['Z7']} / "
+        f"심박존체류 LTHR {int(lthr)}bpm 기준 5존 분 HRZ1 {hr_zones['Z1']} / HRZ2 {hr_zones['Z2']} / "
         f"HRZ3 {hr_zones['Z3']} / HRZ4 {hr_zones['Z4']} / HRZ5 {hr_zones['Z5']} / "
         f"평균심박 {avg_hr if avg_hr is not None else 'NA'}bpm 최대 {max_hr_val if max_hr_val is not None else 'NA'}bpm "
         f"20m최대심박 {mmhr_20m if mmhr_20m is not None else 'NA'}bpm"
@@ -681,6 +694,13 @@ def build_summary(
         "hr_z3_min": hr_zones["Z3"],
         "hr_z4_min": hr_zones["Z4"],
         "hr_z5_min": hr_zones["Z5"],
+        "pz1_min": zones["Z1"],
+        "pz2_min": zones["Z2"],
+        "pz3_min": zones["Z3"],
+        "pz4_min": zones["Z4"],
+        "pz5_min": zones["Z5"],
+        "pz6_min": zones["Z6"],
+        "pz7_min": zones["Z7"],
         "avg_cadence": avg_cad,
         "decoupling_pct": decoupling,
         "block_count": len(blocks),
