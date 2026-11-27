@@ -1,0 +1,88 @@
+{
+  "engine_version": "v2.6",
+  "generated_at_kst": "2026-11-27 15:57:40 KST",
+  "as_of_date": "2026-11-27",
+  "baselines": {
+    "official_ftp_watts": 194.0,
+    "official_lthr_bpm": 147.0,
+    "max_hr_bpm": 173.0,
+    "target_ftp_watts": 240.0,
+    "current_weight_kg": 77.4,
+    "target_weight_kg": 72.0,
+    "event_date": "2027-04-03",
+    "days_to_event": 127
+  },
+  "periodization_phase": {
+    "phase_name": "기초·역치 빌드업 & 1차 테스트",
+    "low_aerobic_pct": [
+      55.0,
+      65.0
+    ],
+    "high_aerobic_pct": [
+      25.0,
+      35.0
+    ],
+    "anaerobic_pct": [
+      10.0,
+      15.0
+    ]
+  },
+  "layer1_daily": {
+    "readiness_status": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
+    "effective_grade": "B",
+    "effective_score": 75.6,
+    "is_hold_after_workout": false,
+    "sleep_debt_3d_hours": 2.5,
+    "hrv_today": 28.0,
+    "hrv_7d_avg": 29.3,
+    "hrv_delta_pct": -4.4,
+    "rhr_today": 52.0,
+    "rhr_7d_avg": 51.4,
+    "rhr_delta_bpm": 0.6,
+    "load_focus_date": "2026-11-26",
+    "load_focus_3": {
+      "low_aerobic": 918.5,
+      "high_aerobic": 485.4,
+      "anaerobic": 209.5,
+      "ratios_pct": {
+        "low_aerobic_pct": 56.9,
+        "high_aerobic_pct": 30.1,
+        "anaerobic_pct": 13.0
+      }
+    },
+    "latest_1s_summary_present": true
+  },
+  "layer2_weekly": {
+    "tss_7d": 105.2,
+    "weekly_target_tss": 260.0,
+    "tss_achievement_pct": 40.5,
+    "monotony_7d": 0.41,
+    "strain_7d": 43.1,
+    "ctl_ramp_rate_7d": -3.6
+  },
+  "layer3_monthly": {
+    "ef_28d_avg": null,
+    "peak_np_28d": null,
+    "candidate_eftp_watts": null,
+    "candidate_eftp_rule": "후보 자동 덮어쓰기 금지 · 표준 테스트/검증 확정 시 일괄 갱신"
+  },
+  "layer4_event_prep": {
+    "current_wkg": 2.51,
+    "target_wkg": 3.33,
+    "ftp_progress_pct": 80.8,
+    "course_summary": "고성공룡나라 그란폰도 B코스 (약 118.8km / 상승 약 1,252m / 핵심 업힐 2.49km · 평균 9.4%)"
+  },
+  "training_balance_latest": {
+    "ctl": 33.8,
+    "atl": 21.9,
+    "tsb": 11.8,
+    "acwr": 0.34
+  },
+  "ingestion_meta": {
+    "fit_rows": 45,
+    "garmin_activity_rows": 45,
+    "strava_activity_rows": 58,
+    "strava_segment_rows": 48,
+    "unified_session_rows": 62
+  }
+}
