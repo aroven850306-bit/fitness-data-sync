@@ -1,6 +1,6 @@
 {
   "engine_version": "v2.6",
-  "generated_at_kst": "2026-11-27 18:44:48 KST",
+  "generated_at_kst": "2026-11-27 19:25:09 KST",
   "as_of_date": "2026-11-27",
   "baselines": {
     "official_ftp_watts": 194.0,
@@ -41,13 +41,13 @@
     "rhr_delta_bpm": 0.6,
     "load_focus_date": "2026-11-27",
     "load_focus_3": {
-      "low_aerobic": 918.5,
+      "low_aerobic": 944.9,
       "high_aerobic": 485.4,
       "anaerobic": 209.5,
       "ratios_pct": {
-        "low_aerobic_pct": 56.9,
-        "high_aerobic_pct": 30.1,
-        "anaerobic_pct": 13.0
+        "low_aerobic_pct": 57.6,
+        "high_aerobic_pct": 29.6,
+        "anaerobic_pct": 12.8
       }
     },
     "latest_1s_summary_present": true
@@ -79,10 +79,10 @@
     "acwr": 0.34
   },
   "ingestion_meta": {
-    "fit_rows": 45,
-    "garmin_activity_rows": 45,
-    "strava_activity_rows": 58,
+    "fit_rows": 46,
+    "garmin_activity_rows": 46,
+    "strava_activity_rows": 59,
     "strava_segment_rows": 48,
-    "unified_session_rows": 62
+    "unified_session_rows": 63
   }
 }
