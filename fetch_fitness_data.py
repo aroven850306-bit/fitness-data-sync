@@ -3,7 +3,7 @@
 Garmin Connect + Strava 데이터 수집 스크립트 (운영 정리 및 Strava 확장 통합 버전)
 - 루트 디렉토리(./)에 CSV 및 fit_files/ 저장
 - Garmin 세션 토큰(JSON/파일/디렉토리) 우선 복원 + 이메일/비밀번호 로그인 fallback (429 회피 지원)
-- 가민 웰니스 + Training Readiness / Training Load / ACWR 수집
+- 가민 웰니스 + Training Readiness / Training Load / ACWR 수집 (불필요한 404 로그 억제)
 - 바디배터리 현재 잔량(body_battery_current) 실측값 안전 추출 (없으면 None으로 유지)
 - Strava 확장 수집:
   1) 활동 상세 조회(RPE perceived_exertion, 칼로리, 트레이너 여부, 최대 속도)
@@ -14,6 +14,7 @@ Garmin Connect + Strava 데이터 수집 스크립트 (운영 정리 및 Strava 
 
 import io
 import json
+import logging
 import os
 import tempfile
 import time
@@ -27,6 +28,9 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 from garminconnect import Garmin
+
+# garminconnect 내부 404 Traceback 도배 억제 (실제 오류는 스크립트에서 직접 처리)
+logging.getLogger("garminconnect").setLevel(logging.CRITICAL)
 
 load_dotenv()
 
@@ -45,6 +49,9 @@ STRAVA_CLIENT_ID = os.getenv("STRAVA_CLIENT_ID", "").strip()
 STRAVA_CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET", "").strip()
 STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "").strip()
 BASELINE_FILE = Path(os.getenv("PERFORMANCE_BASELINE_FILE", str(DATA_DIR / "performance_baseline.json")))
+
+# 404 Not Found가 확인된 선택적 엔드포인트는 같은 실행 내 재호출 생략
+_UNSUPPORTED_ENDPOINTS: set = set()
 
 
 def _find_first_value(data: Any, candidate_keys: Iterable[str]) -> Any:
@@ -398,6 +405,8 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
     }
 
     for fn_name in ("get_training_readiness", "get_morning_training_readiness"):
+        if fn_name in _UNSUPPORTED_ENDPOINTS:
+            continue
         if hasattr(client, fn_name):
             try:
                 raw = getattr(client, fn_name)(d_str)
@@ -415,17 +424,20 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
                         out["training_readiness_level"] = str(level)
                     if out["training_readiness_score"] is not None:
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                if "404" in str(e):
+                    _UNSUPPORTED_ENDPOINTS.add(fn_name)
 
     # garminconnect 내부 connectapi 경로 fallback (Training Readiness)
     if out["training_readiness_score"] is None and hasattr(client, "connectapi"):
-        for endpoint in (
-            f"/metrics-service/metrics/trainingreadiness/{d_str}",
-            f"/metrics-service/metrics/morningtrainingreadiness/{d_str}",
+        for endpoint_prefix in (
+            "/metrics-service/metrics/trainingreadiness",
+            "/metrics-service/metrics/morningtrainingreadiness",
         ):
+            if endpoint_prefix in _UNSUPPORTED_ENDPOINTS:
+                continue
             try:
-                raw = client.connectapi(endpoint)
+                raw = client.connectapi(f"{endpoint_prefix}/{d_str}")
                 if raw:
                     score = _find_first_value(
                         raw,
@@ -440,8 +452,9 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
                         out["training_readiness_level"] = str(level)
                     if out["training_readiness_score"] is not None:
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                if "404" in str(e):
+                    _UNSUPPORTED_ENDPOINTS.add(endpoint_prefix)
 
     def _extract_load_fields(payload: Any) -> None:
         if not payload:
@@ -508,11 +521,14 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
             out["training_load_anaerobic"] = _to_float(anaerobic, ndigits=1)
 
     for fn_name in ("get_training_status", "get_max_metrics"):
+        if fn_name in _UNSUPPORTED_ENDPOINTS:
+            continue
         if hasattr(client, fn_name):
             try:
                 _extract_load_fields(getattr(client, fn_name)(d_str))
-            except Exception:
-                pass
+            except Exception as e:
+                if "404" in str(e):
+                    _UNSUPPORTED_ENDPOINTS.add(fn_name)
 
     # garminconnect 내부 connectapi 경로 fallback (Training Status / Load Balance Focus)
     if hasattr(client, "connectapi") and (
@@ -520,15 +536,18 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
         or out["chronic_load"] is None
         or out["training_load_low_aerobic"] is None
     ):
-        for endpoint in (
-            f"/metrics-service/metrics/trainingstatus/aggregated/{d_str}",
-            f"/metrics-service/metrics/trainingstatus/daily/{d_str}",
-            f"/metrics-service/metrics/trainingloadbalance/latest/{d_str}",
+        for endpoint_prefix in (
+            "/metrics-service/metrics/trainingstatus/aggregated",
+            "/metrics-service/metrics/trainingstatus/daily",
+            "/metrics-service/metrics/trainingloadbalance/latest",
         ):
+            if endpoint_prefix in _UNSUPPORTED_ENDPOINTS:
+                continue
             try:
-                _extract_load_fields(client.connectapi(endpoint))
-            except Exception:
-                pass
+                _extract_load_fields(client.connectapi(f"{endpoint_prefix}/{d_str}"))
+            except Exception as e:
+                if "404" in str(e):
+                    _UNSUPPORTED_ENDPOINTS.add(endpoint_prefix)
 
     if (
         out["acwr"] is None
@@ -701,44 +720,6 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
                         bb_list,
                         ["bodyBatteryDrainedValue", "drained", "totalDrained"],
                     )
-        except Exception:
-            pass
-
-        if resting_hr is None:
-            try:
-                rhr_data = client.get_rhr_day(d_str) or {}
-                metrics_map = rhr_data.get("allMetrics", {}).get("metricsMap", {})
-                rhr_list = metrics_map.get("WELLNESS_RESTING_HEART_RATE", [])
-                if rhr_list:
-                    resting_hr = rhr_list[0].get("value")
-            except Exception:
-                pass
-        if resting_hr is None:
-            try:
-                hr_data = client.get_heart_rates(d_str) or {}
-                resting_hr = hr_data.get("restingHeartRate")
-            except Exception:
-                pass
-
-        # get_body_battery에서 시계열 마지막 유효 잔량(bb_current) 및 최고/최저 보완 추출
-        try:
-            bb_list = client.get_body_battery(d_str, d_str) or []
-            if bb_list and isinstance(bb_list, list):
-                bb_pairs = [
-                    (v[0], v[1])
-                    for entry in bb_list
-                    for v in (entry.get("bodyBatteryValuesArray") or [])
-                    if isinstance(v, (list, tuple)) and len(v) >= 2 and v[1] is not None
-                ]
-                if bb_pairs:
-                    bb_pairs.sort(key=lambda item: item[0])
-                    bb_vals = [p[1] for p in bb_pairs]
-                    if bb_high is None:
-                        bb_high = max(bb_vals)
-                    if bb_low is None:
-                        bb_low = min(bb_vals)
-                    if bb_current is None:
-                        bb_current = bb_pairs[-1][1]
         except Exception:
             pass
 
