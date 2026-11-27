@@ -1,17 +1,17 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-27 09:52:19",
-  "score": 76.6,
+  "as_of_kst": "2026-11-27 10:06:42",
+  "score": 75.6,
   "score_range": [
-    76.6,
-    76.6
+    75.6,
+    75.6
   ],
   "confidence": "높음",
   "completeness_pct": 100.0,
   "permission_grade": "B",
   "permission_label": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
   "gate_reasons": [
-    "준비도 76.6점 (60~79)"
+    "준비도 75.6점 (60~79)"
   ],
   "breakdown": {
     "training_balance": {
@@ -21,10 +21,10 @@
       "detail": "TSB -10.2, ACWR 1.44"
     },
     "sleep_recovery": {
-      "score": 17.1,
+      "score": 16.1,
       "max": 20.0,
       "label": "6.37h",
-      "detail": "수면점수 72점 · 3일부채 2.5h(3일합 18.5h)"
+      "detail": "수면점수 72점 · 3일부채 2.5h(3일합 18.5h) · Deep 114m/REM 58m"
     },
     "hrv_trend": {
       "score": 15.0,
@@ -35,8 +35,8 @@
     "recovery_time": {
       "score": 0.0,
       "max": 15.0,
-      "label": "남은 21.1h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 14.9h · IF×TSS 66.0(권장 36.0h)"
+      "label": "남은 20.9h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 15.1h · IF×TSS 66.0(권장 36.0h)"
     },
     "resting_hr": {
       "score": 15.0,
