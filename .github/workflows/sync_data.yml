@@ -52,7 +52,7 @@ steps:
     env:
       FTP_WATTS: ${{ vars.FTP_WATTS || '194' }}
       LTHR_BPM: ${{ vars.LTHR_BPM || '147' }}
-      MAX_HR: ${{ vars.MAX_HR || '173' }}
+      MAX_HR: ${{ secrets.MAX_HR || vars.MAX_HR || '173' }}
     run: |
       if [ -f analyze_fit.py ]; then python analyze_fit.py; fi
       if [ -f build_latest_1s_summary.py ]; then python build_latest_1s_summary.py; fi
