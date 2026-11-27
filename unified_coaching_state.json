@@ -1,7 +1,7 @@
 {
   "engine_version": "v2.6.1",
-  "generated_at_kst": "2026-11-27 23:33:24 KST",
-  "as_of_date": "2026-11-27",
+  "generated_at_kst": "2026-11-28 00:57:46 KST",
+  "as_of_date": "2026-11-28",
   "baselines": {
     "official_ftp_watts": 194.0,
     "official_lthr_bpm": 147.0,
@@ -10,7 +10,7 @@
     "current_weight_kg": 77.4,
     "target_weight_kg": 72.0,
     "event_date": "2027-04-03",
-    "days_to_event": 127
+    "days_to_event": 126
   },
   "periodization_phase": {
     "phase_name": "기초·역치 빌드업 & 1차 테스트",
@@ -28,17 +28,17 @@
     ]
   },
   "layer1_daily": {
-    "readiness_status": "⏸ 보류 (내일 기상 후 동기화 대기)",
-    "effective_grade": "HOLD",
-    "effective_score": null,
-    "is_hold_after_workout": true,
-    "sleep_debt_3d_hours": 2.5,
-    "hrv_today": 28.0,
-    "hrv_7d_avg": 29.3,
-    "hrv_delta_pct": -4.4,
-    "rhr_today": 52.0,
-    "rhr_7d_avg": 51.4,
-    "rhr_delta_bpm": 0.6,
+    "readiness_status": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
+    "effective_grade": "B",
+    "effective_score": 75.6,
+    "is_hold_after_workout": false,
+    "sleep_debt_3d_hours": 8.2,
+    "hrv_today": null,
+    "hrv_7d_avg": 30.0,
+    "hrv_delta_pct": null,
+    "rhr_today": null,
+    "rhr_7d_avg": 51.3,
+    "rhr_delta_bpm": null,
     "load_focus_date": "2026-11-27",
     "load_focus_3": {
       "low_aerobic": 944.9,
@@ -53,12 +53,12 @@
     "latest_1s_summary_present": true
   },
   "layer2_weekly": {
-    "tss_7d": 277.2,
+    "tss_7d": 202.8,
     "weekly_target_tss": 260.0,
-    "tss_achievement_pct": 106.6,
-    "monotony_7d": 1.43,
-    "strain_7d": 396.4,
-    "ctl_ramp_rate_7d": 2.2
+    "tss_achievement_pct": 78.0,
+    "monotony_7d": 1.09,
+    "strain_7d": 221.1,
+    "ctl_ramp_rate_7d": 0.4
   },
   "layer3_monthly": {
     "ef_28d_avg": 1.14,
@@ -73,10 +73,10 @@
     "course_summary": "고성공룡나라 그란폰도 B코스 (약 118.8km / 상승 약 1,252m / 핵심 업힐 2.49km · 평균 9.4%)"
   },
   "training_balance_latest": {
-    "ctl": 27.5,
-    "atl": 35.9,
-    "tsb": -8.4,
-    "acwr": 1.31
+    "ctl": 26.8,
+    "atl": 31.1,
+    "tsb": -4.3,
+    "acwr": 1.16
   },
   "ingestion_meta": {
     "tss_standard": "Power-based TSS @ FTP 194W (EPOC activity_training_load excluded)",
