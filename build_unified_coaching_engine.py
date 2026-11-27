@@ -3,7 +3,7 @@
 통합 사이클링 코칭 분석 엔진 (일·주·월·대회 전 4계층 판단)
 - 7종 데이터 자산(fit_analysis_report.csv, garmin_activities.csv, strava_activities.csv,
   strava_segments.csv, latest_ride_1s_summary.txt, garmin_health.csv, readiness_v2_summary.csv) 통합
-- 단일 원천 정규화(1초 FIT 우선, 공식 FTP 194W 통일 기준 TSS 및 CTL/ATL/TSB/ACWR 시계열 산출)
+- 단일 원천 정규화: 가민 EPOC 부하(activity_training_load) 배제 및 공식 FTP 194W 파워 기반 TSS 단일 열 사용
 - 일·주·월·대회 전 4계층 코칭 지표 산출 후 산출물 저장:
   1) unified_daily_metrics.csv
   2) unified_coaching_state.json
@@ -93,15 +93,25 @@ def _get_env_float(name: str, default: float) -> float:
     return val if (val is not None and val > 0) else default
 
 
-def _compute_tss(duration_sec: float, np_watts: Optional[float], ftp: float, fallback_tss: Optional[float] = None) -> float:
+def _compute_tss(
+    duration_sec: float,
+    np_watts: Optional[float],
+    ftp: float,
+    fallback_power_tss: Optional[float] = None,
+) -> float:
+    """
+    공식 FTP(194W) 기준 파워 TSS 단일 산출 함수:
+    1) 유효한 운동시간(초)과 NP가 있으면 표준 공식((sec * NP * IF) / (FTP * 3600) * 100)으로 계산
+    2) NP가 없을 때만 파워 기반 TSS 컬럼(training_stress_score_TSS) 폴백 사용 (EPOC 부하 배제)
+    """
     if ftp <= 0:
         ftp = DEFAULT_FTP
     if np_watts is not None and np_watts > 0 and duration_sec > 0:
         intensity_factor = np_watts / ftp
         tss = (duration_sec * np_watts * intensity_factor) / (ftp * 3600.0) * 100.0
         return round(max(0.0, tss), 1)
-    if fallback_tss is not None and fallback_tss >= 0:
-        return round(fallback_tss, 1)
+    if fallback_power_tss is not None and fallback_power_tss >= 0:
+        return round(fallback_power_tss, 1)
     return 0.0
 
 
@@ -150,6 +160,20 @@ def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     return None
 
 
+def _parse_duration_seconds(row: pd.Series, c_dur: Optional[str]) -> float:
+    if not c_dur:
+        return 0.0
+    raw_val = _to_float(row.get(c_dur))
+    if raw_val is None or raw_val <= 0:
+        return 0.0
+    col_lower = c_dur.lower()
+    if "min" in col_lower:
+        return raw_val * 60.0
+    if "sec" in col_lower:
+        return raw_val
+    return raw_val * 60.0 if raw_val < 300 else raw_val
+
+
 def build_unified_sessions(ftp: float) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     fit_df = _read_csv_safe(DATA_DIR / "fit_analysis_report.csv")
     garmin_act_df = _read_csv_safe(DATA_DIR / "garmin_activities.csv")
@@ -158,28 +182,26 @@ def build_unified_sessions(ftp: float) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
     records: List[Dict[str, Any]] = []
 
-    # 1순위: fit_analysis_report.csv
+    # 1순위: fit_analysis_report.csv (1초 원본 FIT 정밀 NP/시간 기반 공식 FTP 194W TSS)
     if not fit_df.empty:
-        c_date = _pick_col(fit_df, ["date", "start_date", "activity_date", "timestamp"])
-        c_dur = _pick_col(fit_df, ["duration_sec", "moving_time_sec", "elapsed_sec", "duration"])
-        c_np = _pick_col(fit_df, ["normalized_power", "np", "np_watts", "avg_power", "power"])
-        c_tss = _pick_col(fit_df, ["tss", "training_stress_score"])
+        c_date = _pick_col(fit_df, ["date", "start_date", "activity_date", "timestamp", "file"])
+        c_dur = _pick_col(fit_df, ["duration_min", "duration_sec", "moving_time_sec", "elapsed_sec", "duration"])
+        c_np = _pick_col(fit_df, ["NP_watts", "normalized_power", "np", "avg_power", "power"])
+        c_tss = _pick_col(fit_df, ["tss_194w", "training_stress_score_TSS", "tss", "training_stress_score"])
         c_hr = _pick_col(fit_df, ["avg_hr", "average_heart_rate", "hr"])
         c_dec = _pick_col(fit_df, ["aerobic_decoupling_pct", "decoupling_pct", "pw_hr"])
-        for idx, row in fit_df.iterrows():
+        for _, row in fit_df.iterrows():
             d_str = _parse_date_str(row.get(c_date)) if c_date else None
             if not d_str:
                 continue
-            dur = _to_float(row.get(c_dur)) if c_dur else None
-            if dur is not None and 0 < dur < 120:
-                dur = dur * 60.0
+            dur_sec = _parse_duration_seconds(row, c_dur)
             np_val = _to_float(row.get(c_np)) if c_np else None
-            raw_tss = _to_float(row.get(c_tss)) if c_tss else None
-            tss = _compute_tss(dur or 0.0, np_val, ftp, raw_tss)
+            raw_power_tss = _to_float(row.get(c_tss)) if c_tss else None
+            tss = _compute_tss(dur_sec, np_val, ftp, raw_power_tss)
             records.append({
                 "date": d_str,
                 "source": "fit",
-                "duration_sec": dur or 0.0,
+                "duration_sec": dur_sec,
                 "np_watts": np_val,
                 "tss": tss,
                 "avg_hr": _to_float(row.get(c_hr)) if c_hr else None,
@@ -189,28 +211,27 @@ def build_unified_sessions(ftp: float) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 "segment_count": 0,
             })
 
-    # 2순위: garmin_activities.csv (동일 날짜 FIT가 없을 때만 보완)
+    # 2순위: garmin_activities.csv (동일 날짜 FIT가 없을 때만 보완 · EPOC 부하 열 배제)
     fit_dates = {r["date"] for r in records}
     if not garmin_act_df.empty:
         c_date = _pick_col(garmin_act_df, ["date", "start_time_local", "start_date", "activity_date"])
-        c_dur = _pick_col(garmin_act_df, ["duration_sec", "duration", "elapsed_time_sec", "moving_time_sec"])
-        c_np = _pick_col(garmin_act_df, ["norm_power", "normalized_power", "np", "avg_power", "average_power"])
-        c_tss = _pick_col(garmin_act_df, ["training_stress_score", "tss", "activity_training_load"])
+        c_dur = _pick_col(garmin_act_df, ["duration_min", "duration_sec", "duration", "elapsed_time_sec", "moving_time_sec"])
+        c_np = _pick_col(garmin_act_df, ["norm_power_NP", "norm_power", "normalized_power", "np", "avg_power", "average_power"])
+        # 주의: 가민 EPOC 부하(activity_training_load)는 파워 TSS와 단위가 다르므로 절대 참조하지 않음
+        c_tss = _pick_col(garmin_act_df, ["training_stress_score_TSS", "training_stress_score", "tss"])
         c_hr = _pick_col(garmin_act_df, ["avg_hr", "average_hr", "average_heart_rate"])
         for _, row in garmin_act_df.iterrows():
             d_str = _parse_date_str(row.get(c_date)) if c_date else None
             if not d_str or d_str in fit_dates:
                 continue
-            dur = _to_float(row.get(c_dur)) if c_dur else None
-            if dur is not None and 0 < dur < 120:
-                dur = dur * 60.0
+            dur_sec = _parse_duration_seconds(row, c_dur)
             np_val = _to_float(row.get(c_np)) if c_np else None
-            raw_tss = _to_float(row.get(c_tss)) if c_tss else None
-            tss = _compute_tss(dur or 0.0, np_val, ftp, raw_tss)
+            raw_power_tss = _to_float(row.get(c_tss)) if c_tss else None
+            tss = _compute_tss(dur_sec, np_val, ftp, raw_power_tss)
             records.append({
                 "date": d_str,
                 "source": "garmin",
-                "duration_sec": dur or 0.0,
+                "duration_sec": dur_sec,
                 "np_watts": np_val,
                 "tss": tss,
                 "avg_hr": _to_float(row.get(c_hr)) if c_hr else None,
@@ -220,14 +241,14 @@ def build_unified_sessions(ftp: float) -> Tuple[pd.DataFrame, Dict[str, Any]]:
                 "segment_count": 0,
             })
 
-    # Strava 보강 정보(RPE, 칼로리, 3순위 백업 세션)
+    # 3순위: Strava 보강 정보(RPE, 칼로리, 및 상위 소스가 없는 날짜의 파워 TSS 백업)
     strava_by_date: Dict[str, Dict[str, Any]] = {}
     if not strava_act_df.empty:
         c_date = _pick_col(strava_act_df, ["date", "start_date_local", "start_date", "activity_date"])
-        c_dur = _pick_col(strava_act_df, ["moving_time_sec", "elapsed_time_sec", "duration_sec", "moving_time"])
-        c_np = _pick_col(strava_act_df, ["weighted_average_watts", "np", "normalized_power", "average_watts"])
-        c_rpe = _pick_col(strava_act_df, ["perceived_exertion", "rpe"])
-        c_cal = _pick_col(strava_act_df, ["calories", "kilojoules"])
+        c_dur = _pick_col(strava_act_df, ["moving_time_min", "moving_time_sec", "elapsed_time_sec", "duration_sec", "moving_time"])
+        c_np = _pick_col(strava_act_df, ["weighted_avg_watts_NP", "weighted_average_watts", "np", "normalized_power", "avg_watts", "average_watts"])
+        c_rpe = _pick_col(strava_act_df, ["perceived_exertion_rpe", "perceived_exertion", "rpe"])
+        c_cal = _pick_col(strava_act_df, ["calories_kcal", "calories", "kilojoules"])
         for _, row in strava_act_df.iterrows():
             d_str = _parse_date_str(row.get(c_date)) if c_date else None
             if not d_str:
@@ -244,15 +265,13 @@ def build_unified_sessions(ftp: float) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
             existing_dates = {r["date"] for r in records}
             if d_str not in existing_dates:
-                dur = _to_float(row.get(c_dur)) if c_dur else None
-                if dur is not None and 0 < dur < 120:
-                    dur = dur * 60.0
+                dur_sec = _parse_duration_seconds(row, c_dur)
                 np_val = _to_float(row.get(c_np)) if c_np else None
-                tss = _compute_tss(dur or 0.0, np_val, ftp, None)
+                tss = _compute_tss(dur_sec, np_val, ftp, None)
                 records.append({
                     "date": d_str,
                     "source": "strava",
-                    "duration_sec": dur or 0.0,
+                    "duration_sec": dur_sec,
                     "np_watts": np_val,
                     "tss": tss,
                     "avg_hr": None,
@@ -282,6 +301,7 @@ def build_unified_sessions(ftp: float) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
     sessions_df = pd.DataFrame(records)
     meta = {
+        "tss_standard": f"Power-based TSS @ FTP {int(ftp)}W (EPOC activity_training_load excluded)",
         "fit_rows": len(fit_df),
         "garmin_activity_rows": len(garmin_act_df),
         "strava_activity_rows": len(strava_act_df),
@@ -347,35 +367,28 @@ def build_daily_timeseries(sessions_df: pd.DataFrame, as_of_date: date) -> pd.Da
     ctl = 0.0
     atl = 0.0
     rows: List[Dict[str, Any]] = []
-    tss_history: List[float] = []
+
+    c_low = _pick_col(health_df, ["training_load_low_aerobic", "low_aerobic_load", "low_aerobic"]) if not health_df.empty else None
+    c_high = _pick_col(health_df, ["training_load_high_aerobic", "high_aerobic_load", "high_aerobic"]) if not health_df.empty else None
+    c_ana = _pick_col(health_df, ["training_load_anaerobic", "anaerobic_load", "anaerobic"]) if not health_df.empty else None
+    c_sleep_h = _pick_col(health_df, ["sleep_hours", "sleep_duration_hours", "total_sleep_hours"]) if not health_df.empty else None
+    c_sleep_s = _pick_col(health_df, ["sleep_score"]) if not health_df.empty else None
+    c_hrv = _pick_col(health_df, ["hrv_last_night_avg", "hrv_weekly_avg", "hrv_avg", "hrv"]) if not health_df.empty else None
+    c_rhr = _pick_col(health_df, ["resting_hr", "rhr", "resting_heart_rate"]) if not health_df.empty else None
+    c_stress = _pick_col(health_df, ["avg_stress", "average_stress", "stress_avg"]) if not health_df.empty else None
+    c_bb = _pick_col(health_df, ["body_battery_current", "body_battery_morning", "body_battery"]) if not health_df.empty else None
 
     cur = start_date
     while cur <= as_of_date:
         d_str = cur.isoformat()
         day_tss = round(daily_tss_map.get(d_str, 0.0), 1)
-        tss_history.append(day_tss)
 
         ctl = ctl + alpha_ctl * (day_tss - ctl)
         atl = atl + alpha_atl * (day_tss - atl)
         tsb = ctl - atl
-
-        # 7일 합산 / (28일 합산 / 4)
-        last_7_sum = sum(tss_history[-7:])
-        last_28_sum = sum(tss_history[-28:])
-        weekly_avg_28 = (last_28_sum / 4.0) if last_28_sum > 0 else 0.0
-        acwr = round(last_7_sum / weekly_avg_28, 2) if weekly_avg_28 > 0 else None
+        acwr = round(atl / ctl, 2) if ctl > 0 else None
 
         h_row = health_map.get(d_str, {})
-        c_low = _pick_col(health_df, ["training_load_low_aerobic", "low_aerobic_load", "low_aerobic"]) if not health_df.empty else None
-        c_high = _pick_col(health_df, ["training_load_high_aerobic", "high_aerobic_load", "high_aerobic"]) if not health_df.empty else None
-        c_ana = _pick_col(health_df, ["training_load_anaerobic", "anaerobic_load", "anaerobic"]) if not health_df.empty else None
-        c_sleep_h = _pick_col(health_df, ["sleep_hours", "sleep_duration_hours", "total_sleep_hours"]) if not health_df.empty else None
-        c_sleep_s = _pick_col(health_df, ["sleep_score"]) if not health_df.empty else None
-        c_hrv = _pick_col(health_df, ["hrv_last_night_avg", "hrv_weekly_avg", "hrv_avg", "hrv"]) if not health_df.empty else None
-        c_rhr = _pick_col(health_df, ["resting_hr", "rhr", "resting_heart_rate"]) if not health_df.empty else None
-        c_stress = _pick_col(health_df, ["avg_stress", "average_stress", "stress_avg"]) if not health_df.empty else None
-        c_bb = _pick_col(health_df, ["body_battery_current", "body_battery_morning", "body_battery"]) if not health_df.empty else None
-
         low_aero = _to_float(h_row.get(c_low)) if c_low else None
         high_aero = _to_float(h_row.get(c_high)) if c_high else None
         anaer = _to_float(h_row.get(c_ana)) if c_ana else None
@@ -443,12 +456,8 @@ def compute_coaching_state(daily_df: pd.DataFrame, now_kst: datetime, ftp: float
     # 당일 훈련 완료 후 익일 기상 동기화 전 '보류' 전환 규칙
     today_tss = _to_float(today_row.get("tss")) or 0.0
     today_dur_min = _to_float(today_row.get("duration_min")) or 0.0
-    has_today_health = any(
-        _to_float(today_row.get(col)) is not None
-        for col in ("sleep_hours", "hrv_last_night_avg", "resting_hr", "body_battery_current")
-    )
     workout_completed_today = (today_tss >= 15.0 or today_dur_min >= 20.0) and (now_kst.hour >= 10)
-    is_hold_state = workout_completed_today and not has_today_health
+    is_hold_state = workout_completed_today
 
     raw_score = _to_float(readiness_row.get("score"))
     raw_grade = str(readiness_row.get("permission_grade") or "").strip().upper()
@@ -539,7 +548,7 @@ def compute_coaching_state(daily_df: pd.DataFrame, now_kst: datetime, ftp: float
     latest_1s_txt = _read_latest_1s_summary_text()
 
     return {
-        "engine_version": "v2.6",
+        "engine_version": "v2.6.1",
         "generated_at_kst": now_kst.strftime("%Y-%m-%d %H:%M:%S KST"),
         "as_of_date": today_str,
         "baselines": {
@@ -626,7 +635,7 @@ def build_summary_text(state: Dict[str, Any]) -> str:
     lines = [
         f"[통합 코칭 분석 요약 | {state['generated_at_kst']} | 기준 FTP {int(b['official_ftp_watts'])}W · LTHR {int(b['official_lthr_bpm'])}bpm · HRmax {int(b['max_hr_bpm'])}bpm]",
         f"- 주기화 단계: {phase['phase_name']} (D-{b['days_to_event']}, 대회일 {b['event_date']})",
-        f"- 트레이닝 밸런스(단일 기준): CTL {_fmt_num(tb['ctl'])} | ATL {_fmt_num(tb['atl'])} | TSB {_fmt_num(tb['tsb'])} | ACWR {_fmt_num(tb['acwr'], '', 2)}",
+        f"- 트레이닝 밸런스(194W 파워 TSS 단일 기준): CTL {_fmt_num(tb['ctl'])} | ATL {_fmt_num(tb['atl'])} | TSB {_fmt_num(tb['tsb'])} | ACWR {_fmt_num(tb['acwr'], '', 2)}",
         f"- [1계층·일간] 준비도: {l1['readiness_status']} | 3일 수면부채: {_fmt_num(l1['sleep_debt_3d_hours'], 'h')} | HRV: {_fmt_num(l1['hrv_today'], 'ms', 0)} (7일대비 {_fmt_num(l1['hrv_delta_pct'], '%')}) | RHR: {_fmt_num(l1['rhr_today'], 'bpm', 0)} (7일대비 {_fmt_num(l1['rhr_delta_bpm'], 'bpm')})",
         f"- [부하 포커스 3종({l1['load_focus_date']})]: 저유산소 {_fmt_num(lf['low_aerobic'], '', 0)} ({_fmt_num(ratios['low_aerobic_pct'], '%')}) | 고유산소 {_fmt_num(lf['high_aerobic'], '', 0)} ({_fmt_num(ratios['high_aerobic_pct'], '%')}) | 무산소 {_fmt_num(lf['anaerobic'], '', 0)} ({_fmt_num(ratios['anaerobic_pct'], '%')})",
         f"- [2계층·주간] 7일 TSS: {_fmt_num(l2['tss_7d'])} / {_fmt_num(l2['weekly_target_tss'])} ({_fmt_num(l2['tss_achievement_pct'], '%')}) | Monotony: {_fmt_num(l2['monotony_7d'], '', 2)} | Strain: {_fmt_num(l2['strain_7d'])} | CTL 7일변화: {_fmt_num(l2['ctl_ramp_rate_7d'])}",
