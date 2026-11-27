@@ -1,6 +1,6 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-27 09:47:57",
+  "as_of_kst": "2026-11-27 09:52:19",
   "score": 76.6,
   "score_range": [
     76.6,
@@ -35,8 +35,8 @@
     "recovery_time": {
       "score": 0.0,
       "max": 15.0,
-      "label": "남은 21.2h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 14.8h · IF×TSS 66.0(권장 36.0h)"
+      "label": "남은 21.1h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 14.9h · IF×TSS 66.0(권장 36.0h)"
     },
     "resting_hr": {
       "score": 15.0,
