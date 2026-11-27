@@ -33,11 +33,6 @@ RAW_FILE_SYNC_TARGETS = [
     ("unified_coaching_state.json", "application/json"),
 ]
 
-# 동기화 대상 1초 통합 요약 TXT 파일 및 Google 스프레드시트 이름 매핑
-TXT_SYNC_TARGETS = [
-    ("latest_ride_1s_summary.txt", "latest_ride_1s_summary"),
-]
-
 
 def _create_drive_service():
     """
