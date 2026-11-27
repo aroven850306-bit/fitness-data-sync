@@ -11,7 +11,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # Google Drive API 단일 스코프만 사용 (Google Sheets API 별도 활성화 불필요)
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-# 동기화 대상 CSV 파일 및 대상 Google 스프레드시트 이름 매핑
+# 1. 동기화 대상 CSV 파일 및 대상 Google 스프레드시트 이름 매핑
 CSV_SYNC_TARGETS = [
     ("fit_analysis_report.csv", "fit_analysis_report"),
     ("garmin_activities.csv", "garmin_activities"),
@@ -22,13 +22,13 @@ CSV_SYNC_TARGETS = [
     ("unified_daily_metrics.csv", "unified_daily_metrics"),
 ]
 
-# 동기화 대상 요약 TXT / JSON 파일 및 Google 스프레드시트 이름 매핑
+# 2. 동기화 대상 요약 TXT 파일 및 대상 Google 스프레드시트 이름 매핑
 TXT_SYNC_TARGETS = [
     ("latest_ride_1s_summary.txt", "latest_ride_1s_summary"),
     ("unified_coaching_summary.txt", "unified_coaching_summary"),
 ]
 
-# 동기화 대상 원본 파일(JSON 등) 매핑 (Drive 폴더 내 일반 파일 덮어쓰기)
+# 3. 동기화 대상 원본 파일(JSON 등) 매핑 (Google Drive 대상 폴더 내 파일 덮어쓰기/생성)
 RAW_FILE_SYNC_TARGETS = [
     ("unified_coaching_state.json", "application/json"),
 ]
