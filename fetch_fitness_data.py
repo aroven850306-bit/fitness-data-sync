@@ -478,19 +478,36 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         hrv_status = None
         hrv_base_low = None
         hrv_base_high = None
+        hrv_weekly_avg = None
+        min_hr = None
+        max_hr = None
         sleep_score = None
         sleep_hours = None
         deep_sleep_min = None
         rem_sleep_min = None
+        light_sleep_min = None
+        awake_sleep_min = None
         max_stress = None
         rest_stress_sec = None
+        bb_charged = None
+        bb_drained = None
         avg_respiration = None
         avg_spo2 = None
+        active_kcal = None
+        total_kcal = None
         steps = None
 
         try:
             stats = client.get_stats(d_str) or {}
             resting_hr = stats.get("restingHeartRate")
+            min_hr = _find_first_value(
+                stats,
+                ["minHeartRate", "restingHeartRate", "minHr", "lowestHeartRate"],
+            )
+            max_hr = _find_first_value(
+                stats,
+                ["maxHeartRate", "maxHr", "highestHeartRate"],
+            )
             avg_stress = stats.get("averageStressLevel")
             max_stress = _find_first_value(
                 stats,
@@ -510,11 +527,97 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             )
             bb_high = stats.get("bodyBatteryHighestValue")
             bb_low = stats.get("bodyBatteryLowestValue")
+            bb_charged = _find_first_value(
+                stats,
+                ["bodyBatteryChargedValue", "bodyBatteryCharged", "chargedBodyBattery"],
+            )
+            bb_drained = _find_first_value(
+                stats,
+                ["bodyBatteryDrainedValue", "bodyBatteryDrained", "drainedBodyBattery"],
+            )
             bb_current = _find_first_value(
                 stats,
                 ["bodyBatteryMostRecentValue", "bodyBatteryCurrentValue", "currentBodyBattery", "bodyBatteryLatestValue"],
             )
+            active_kcal = _find_first_value(
+                stats,
+                ["activeKilocalories", "activeKcal", "activeCalories"],
+            )
+            total_kcal = _find_first_value(
+                stats,
+                ["totalKilocalories", "totalKcal", "calories"],
+            )
+            if total_kcal is None and active_kcal is not None:
+                bmr_kcal = _find_first_value(
+                    stats,
+                    ["bmrKilocalories", "restingKilocalories", "bmrKcal"],
+                )
+                if bmr_kcal is not None:
+                    try:
+                        total_kcal = float(active_kcal) + float(bmr_kcal)
+                    except (ValueError, TypeError):
+                        pass
             steps = stats.get("totalSteps")
+        except Exception:
+            pass
+
+        if resting_hr is None or min_hr is None or max_hr is None:
+            try:
+                hr_data = client.get_heart_rates(d_str) or {}
+                if resting_hr is None:
+                    resting_hr = hr_data.get("restingHeartRate")
+                if min_hr is None:
+                    min_hr = _find_first_value(
+                        hr_data,
+                        ["minHeartRate", "restingHeartRate", "minHr"],
+                    )
+                if max_hr is None:
+                    max_hr = _find_first_value(
+                        hr_data,
+                        ["maxHeartRate", "maxHr"],
+                    )
+            except Exception:
+                pass
+
+        if resting_hr is None:
+            try:
+                rhr_data = client.get_rhr_day(d_str) or {}
+                metrics_map = rhr_data.get("allMetrics", {}).get("metricsMap", {})
+                rhr_list = metrics_map.get("WELLNESS_RESTING_HEART_RATE", [])
+                if rhr_list:
+                    resting_hr = rhr_list[0].get("value")
+            except Exception:
+                pass
+
+        # get_body_battery에서 시계열 마지막 유효 잔량(bb_current) 및 최고/최저 보완 추출
+        try:
+            bb_list = client.get_body_battery(d_str, d_str) or []
+            if bb_list and isinstance(bb_list, list):
+                bb_pairs = [
+                    (v[0], v[1])
+                    for entry in bb_list
+                    for v in (entry.get("bodyBatteryValuesArray") or [])
+                    if isinstance(v, (list, tuple)) and len(v) >= 2 and v[1] is not None
+                ]
+                if bb_pairs:
+                    bb_pairs.sort(key=lambda item: item[0])
+                    bb_vals = [p[1] for p in bb_pairs]
+                    if bb_high is None:
+                        bb_high = max(bb_vals)
+                    if bb_low is None:
+                        bb_low = min(bb_vals)
+                    if bb_current is None:
+                        bb_current = bb_pairs[-1][1]
+                if bb_charged is None:
+                    bb_charged = _find_first_value(
+                        bb_list,
+                        ["bodyBatteryChargedValue", "charged", "totalCharged"],
+                    )
+                if bb_drained is None:
+                    bb_drained = _find_first_value(
+                        bb_list,
+                        ["bodyBatteryDrainedValue", "drained", "totalDrained"],
+                    )
         except Exception:
             pass
 
@@ -614,6 +717,13 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             hrv_summary = hrv_data.get("hrvSummary") or {}
             hrv_avg = hrv_summary.get("lastNightAvg")
             hrv_status = hrv_summary.get("status")
+            hrv_weekly_avg = _find_first_value(
+                hrv_summary,
+                ["weeklyAvg", "lastNight5MinHigh", "baselineBalancedAvg", "weeklyAverage"],
+            ) or _find_first_value(
+                hrv_data,
+                ["weeklyAvg", "weeklyAverage"],
+            )
             baseline = hrv_summary.get("baseline") or {}
             hrv_base_low = baseline.get("balancedLow")
             hrv_base_high = baseline.get("balancedUpper")
@@ -644,6 +754,18 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             if rem_sec is not None:
                 rem_sleep_min = _to_float(float(rem_sec) / 60.0, ndigits=0)
 
+            light_sec = daily_sleep.get("lightSleepSeconds")
+            if light_sec is None:
+                light_sec = _find_first_value(sleep_data, ["lightSleepSeconds", "lightSleepDurationInSeconds"])
+            if light_sec is not None:
+                light_sleep_min = _to_float(float(light_sec) / 60.0, ndigits=0)
+
+            awake_sec = daily_sleep.get("awakeSleepSeconds")
+            if awake_sec is None:
+                awake_sec = _find_first_value(sleep_data, ["awakeSleepSeconds", "awakeSleepDurationInSeconds"])
+            if awake_sec is not None:
+                awake_sleep_min = _to_float(float(awake_sec) / 60.0, ndigits=0)
+
             if avg_respiration is None:
                 avg_respiration = _find_first_value(
                     daily_sleep, ["averageRespirationValue", "avgRespirationValue"]
@@ -661,13 +783,18 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             {
                 "date": d_str,
                 "resting_hr": resting_hr,
+                "min_hr": _to_float(min_hr, ndigits=0),
+                "max_hr": _to_float(max_hr, ndigits=0),
                 "avg_stress": avg_stress,
                 "max_stress": _to_float(max_stress, ndigits=0),
                 "rest_stress_sec": _to_float(rest_stress_sec, ndigits=0),
                 "body_battery_high": bb_high,
                 "body_battery_low": bb_low,
+                "body_battery_charged": _to_float(bb_charged, ndigits=0),
+                "body_battery_drained": _to_float(bb_drained, ndigits=0),
                 "body_battery_current": bb_current,
                 "hrv_last_night_avg": hrv_avg,
+                "hrv_weekly_avg": _to_float(hrv_weekly_avg, ndigits=0),
                 "hrv_status": hrv_status,
                 "hrv_baseline_low": hrv_base_low,
                 "hrv_baseline_high": hrv_base_high,
@@ -675,8 +802,12 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
                 "sleep_hours": sleep_hours,
                 "deep_sleep_min": deep_sleep_min,
                 "rem_sleep_min": rem_sleep_min,
+                "light_sleep_min": light_sleep_min,
+                "awake_sleep_min": awake_sleep_min,
                 "avg_respiration": _to_float(avg_respiration, ndigits=1),
                 "avg_spo2": _to_float(avg_spo2, ndigits=0),
+                "active_kcal": _to_float(active_kcal, ndigits=0),
+                "total_kcal": _to_float(total_kcal, ndigits=0),
                 "steps": steps,
                 "training_readiness_score": rl_info["training_readiness_score"],
                 "training_readiness_level": rl_info["training_readiness_level"],
