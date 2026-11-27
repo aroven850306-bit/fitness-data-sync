@@ -1,6 +1,6 @@
 {
-  "engine_version": "v2.6",
-  "generated_at_kst": "2026-11-27 20:56:12 KST",
+  "engine_version": "v2.6.1",
+  "generated_at_kst": "2026-11-27 21:50:40 KST",
   "as_of_date": "2026-11-27",
   "baselines": {
     "official_ftp_watts": 194.0,
@@ -28,10 +28,10 @@
     ]
   },
   "layer1_daily": {
-    "readiness_status": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
-    "effective_grade": "B",
-    "effective_score": 75.6,
-    "is_hold_after_workout": false,
+    "readiness_status": "⏸ 보류 (내일 기상 후 동기화 대기)",
+    "effective_grade": "HOLD",
+    "effective_score": null,
+    "is_hold_after_workout": true,
     "sleep_debt_3d_hours": 2.5,
     "hrv_today": 28.0,
     "hrv_7d_avg": 29.3,
@@ -53,16 +53,16 @@
     "latest_1s_summary_present": true
   },
   "layer2_weekly": {
-    "tss_7d": 105.2,
+    "tss_7d": 277.2,
     "weekly_target_tss": 260.0,
-    "tss_achievement_pct": 40.5,
-    "monotony_7d": 0.41,
-    "strain_7d": 43.1,
-    "ctl_ramp_rate_7d": -3.6
+    "tss_achievement_pct": 106.6,
+    "monotony_7d": 1.43,
+    "strain_7d": 396.4,
+    "ctl_ramp_rate_7d": 2.2
   },
   "layer3_monthly": {
-    "ef_28d_avg": null,
-    "peak_np_28d": null,
+    "ef_28d_avg": 1.14,
+    "peak_np_28d": 181.9,
     "candidate_eftp_watts": null,
     "candidate_eftp_rule": "후보 자동 덮어쓰기 금지 · 표준 테스트/검증 확정 시 일괄 갱신"
   },
@@ -73,12 +73,13 @@
     "course_summary": "고성공룡나라 그란폰도 B코스 (약 118.8km / 상승 약 1,252m / 핵심 업힐 2.49km · 평균 9.4%)"
   },
   "training_balance_latest": {
-    "ctl": 33.8,
-    "atl": 21.9,
-    "tsb": 11.8,
-    "acwr": 0.34
+    "ctl": 27.5,
+    "atl": 35.9,
+    "tsb": -8.4,
+    "acwr": 1.31
   },
   "ingestion_meta": {
+    "tss_standard": "Power-based TSS @ FTP 194W (EPOC activity_training_load excluded)",
     "fit_rows": 46,
     "garmin_activity_rows": 46,
     "strava_activity_rows": 59,
