@@ -384,7 +384,7 @@ def fetch_garmin_activities(client: Garmin, limit: int = ACTIVITY_LIMIT) -> pd.D
 
 
 def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
-    """특정 날짜(YYYY-MM-DD)의 Training Readiness 및 Training Load / ACWR 조회"""
+    """특정 날짜(YYYY-MM-DD)의 Training Readiness, Training Load/ACWR 및 훈련 부하 포커스 3종 조회"""
     out: Dict[str, Any] = {
         "training_readiness_score": None,
         "training_readiness_level": None,
@@ -392,6 +392,9 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
         "acute_load": None,
         "chronic_load": None,
         "acwr": None,
+        "training_load_low_aerobic": None,
+        "training_load_high_aerobic": None,
+        "training_load_anaerobic": None,
     }
 
     for fn_name in ("get_training_readiness", "get_morning_training_readiness"):
@@ -415,35 +418,115 @@ def _fetch_readiness_and_load(client: Garmin, d_str: str) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    # garminconnect 내부 connectapi 경로 fallback (Training Readiness)
+    if out["training_readiness_score"] is None and hasattr(client, "connectapi"):
+        for endpoint in (
+            f"/metrics-service/metrics/trainingreadiness/{d_str}",
+            f"/metrics-service/metrics/morningtrainingreadiness/{d_str}",
+        ):
+            try:
+                raw = client.connectapi(endpoint)
+                if raw:
+                    score = _find_first_value(
+                        raw,
+                        ["score", "trainingReadinessScore", "readinessScore", "overallScore"],
+                    )
+                    level = _find_first_value(
+                        raw,
+                        ["level", "trainingReadinessLevel", "category", "feedbackShort"],
+                    )
+                    out["training_readiness_score"] = _to_float(score, ndigits=0)
+                    if level is not None and out["training_readiness_level"] is None:
+                        out["training_readiness_level"] = str(level)
+                    if out["training_readiness_score"] is not None:
+                        break
+            except Exception:
+                pass
+
+    def _extract_load_fields(payload: Any) -> None:
+        if not payload:
+            return
+        status_label = _find_first_value(
+            payload,
+            ["trainingStatusPhrase", "trainingStatus", "statusPhrase", "status"],
+        )
+        acute = _find_first_value(
+            payload,
+            ["dailyAcuteLoad", "acuteLoad", "acuteTrainingLoad", "atl", "dailyAcuteTrainingLoad"],
+        )
+        chronic = _find_first_value(
+            payload,
+            ["dailyChronicLoad", "chronicLoad", "chronicTrainingLoad", "ctl", "dailyChronicTrainingLoad"],
+        )
+        acwr_val = _find_first_value(
+            payload,
+            ["acwr", "loadRatio", "acuteChronicWorkloadRatio", "acwrRatio"],
+        )
+        low_aero = _find_first_value(
+            payload,
+            [
+                "monthlyLoadAerobicLow",
+                "dailyLoadAerobicLow",
+                "aerobicLowLoad",
+                "lowAerobicLoad",
+                "trainingLoadAerobicLow",
+            ],
+        )
+        high_aero = _find_first_value(
+            payload,
+            [
+                "monthlyLoadAerobicHigh",
+                "dailyLoadAerobicHigh",
+                "aerobicHighLoad",
+                "highAerobicLoad",
+                "trainingLoadAerobicHigh",
+            ],
+        )
+        anaerobic = _find_first_value(
+            payload,
+            [
+                "monthlyLoadAnaerobic",
+                "dailyLoadAnaerobic",
+                "anaerobicLoad",
+                "trainingLoadAnaerobic",
+            ],
+        )
+
+        if status_label is not None and out["training_status"] is None:
+            out["training_status"] = str(status_label)
+        if acute is not None and out["acute_load"] is None:
+            out["acute_load"] = _to_float(acute, ndigits=1)
+        if chronic is not None and out["chronic_load"] is None:
+            out["chronic_load"] = _to_float(chronic, ndigits=1)
+        if acwr_val is not None and out["acwr"] is None:
+            out["acwr"] = _to_float(acwr_val, ndigits=2)
+        if low_aero is not None and out["training_load_low_aerobic"] is None:
+            out["training_load_low_aerobic"] = _to_float(low_aero, ndigits=1)
+        if high_aero is not None and out["training_load_high_aerobic"] is None:
+            out["training_load_high_aerobic"] = _to_float(high_aero, ndigits=1)
+        if anaerobic is not None and out["training_load_anaerobic"] is None:
+            out["training_load_anaerobic"] = _to_float(anaerobic, ndigits=1)
+
     for fn_name in ("get_training_status", "get_max_metrics"):
         if hasattr(client, fn_name):
             try:
-                raw = getattr(client, fn_name)(d_str)
-                if raw:
-                    status_label = _find_first_value(
-                        raw,
-                        ["trainingStatusPhrase", "trainingStatus", "statusPhrase", "status"],
-                    )
-                    acute = _find_first_value(
-                        raw,
-                        ["dailyAcuteLoad", "acuteLoad", "acuteTrainingLoad", "atl", "dailyAcuteTrainingLoad"],
-                    )
-                    chronic = _find_first_value(
-                        raw,
-                        ["dailyChronicLoad", "chronicLoad", "chronicTrainingLoad", "ctl", "dailyChronicTrainingLoad"],
-                    )
-                    acwr_val = _find_first_value(
-                        raw,
-                        ["acwr", "loadRatio", "acuteChronicWorkloadRatio", "acwrRatio"],
-                    )
-                    if status_label is not None and out["training_status"] is None:
-                        out["training_status"] = str(status_label)
-                    if acute is not None and out["acute_load"] is None:
-                        out["acute_load"] = _to_float(acute, ndigits=1)
-                    if chronic is not None and out["chronic_load"] is None:
-                        out["chronic_load"] = _to_float(chronic, ndigits=1)
-                    if acwr_val is not None and out["acwr"] is None:
-                        out["acwr"] = _to_float(acwr_val, ndigits=2)
+                _extract_load_fields(getattr(client, fn_name)(d_str))
+            except Exception:
+                pass
+
+    # garminconnect 내부 connectapi 경로 fallback (Training Status / Load Balance Focus)
+    if hasattr(client, "connectapi") and (
+        out["acute_load"] is None
+        or out["chronic_load"] is None
+        or out["training_load_low_aerobic"] is None
+    ):
+        for endpoint in (
+            f"/metrics-service/metrics/trainingstatus/aggregated/{d_str}",
+            f"/metrics-service/metrics/trainingstatus/daily/{d_str}",
+            f"/metrics-service/metrics/trainingloadbalance/latest/{d_str}",
+        ):
+            try:
+                _extract_load_fields(client.connectapi(endpoint))
             except Exception:
                 pass
 
@@ -815,6 +898,9 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
                 "acute_load": rl_info["acute_load"],
                 "chronic_load": rl_info["chronic_load"],
                 "acwr": rl_info["acwr"],
+                "training_load_low_aerobic": rl_info["training_load_low_aerobic"],
+                "training_load_high_aerobic": rl_info["training_load_high_aerobic"],
+                "training_load_anaerobic": rl_info["training_load_anaerobic"],
             }
         )
         time.sleep(0.15)
