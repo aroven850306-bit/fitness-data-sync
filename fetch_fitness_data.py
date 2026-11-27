@@ -47,6 +47,46 @@ STRAVA_REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN", "").strip()
 BASELINE_FILE = Path(os.getenv("PERFORMANCE_BASELINE_FILE", str(DATA_DIR / "performance_baseline.json")))
 
 
+def _find_first_value(data: Any, candidate_keys: Iterable[str]) -> Any:
+    """중첩 dict/list 구조에서 candidate_keys 중 먼저 발견되는 유효 값을 반환"""
+    key_list = list(candidate_keys)
+
+    def _walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            for k in key_list:
+                if k in node and node[k] is not None and node[k] != "":
+                    return node[k]
+            for v in node.values():
+                found = _walk(v)
+                if found is not None and found != "":
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = _walk(item)
+                if found is not None and found != "":
+                    return found
+        return None
+
+    return _walk(data)
+
+
+def _to_float(val: Any, ndigits: Optional[int] = 2) -> Optional[float]:
+    """숫자 변환 후 반올림 반환 (정수형 ndigits=0이면 int 반환)"""
+    if val is None or val == "":
+        return None
+    try:
+        num = float(val)
+        if not np.isfinite(num):
+            return None
+        if ndigits == 0:
+            return int(round(num))
+        if ndigits is not None:
+            return round(num, ndigits)
+        return num
+    except (ValueError, TypeError):
+        return None
+
+
 def _load_performance_baseline() -> Tuple[float, float, float]:
     """
     기준 성능값(FTP, LTHR, HRmax)을 로드합니다.
@@ -91,46 +131,6 @@ WELLNESS_DAYS = int(os.getenv("WELLNESS_DAYS", "30"))
 ACTIVITY_LIMIT = int(os.getenv("ACTIVITY_LIMIT", "100"))
 # Strava 상세/존/스트림 API 호출 대상 최신 미수집 활동 수 (15분 100회 제한 보호)
 STRAVA_DETAIL_LIMIT = int(os.getenv("STRAVA_DETAIL_LIMIT", "15"))
-
-
-def _find_first_value(data: Any, candidate_keys: Iterable[str]) -> Any:
-    """중첩 dict/list 구조에서 candidate_keys 중 먼저 발견되는 유효 값을 반환"""
-    key_list = list(candidate_keys)
-
-    def _walk(node: Any) -> Any:
-        if isinstance(node, dict):
-            for k in key_list:
-                if k in node and node[k] is not None and node[k] != "":
-                    return node[k]
-            for v in node.values():
-                found = _walk(v)
-                if found is not None and found != "":
-                    return found
-        elif isinstance(node, list):
-            for item in node:
-                found = _walk(item)
-                if found is not None and found != "":
-                    return found
-        return None
-
-    return _walk(data)
-
-
-def _to_float(val: Any, ndigits: Optional[int] = 2) -> Optional[float]:
-    """숫자 변환 후 반올림 반환 (정수형 ndigits=0이면 int 반환)"""
-    if val is None or val == "":
-        return None
-    try:
-        num = float(val)
-        if not np.isfinite(num):
-            return None
-        if ndigits == 0:
-            return int(round(num))
-        if ndigits is not None:
-            return round(num, ndigits)
-        return num
-    except (ValueError, TypeError):
-        return None
 
 
 def _merge_prefer_non_null(existing_df: pd.DataFrame, new_df: pd.DataFrame, key_col: str) -> pd.DataFrame:
