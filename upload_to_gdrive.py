@@ -19,6 +19,18 @@ CSV_SYNC_TARGETS = [
     ("strava_activities.csv", "strava_activities"),
     ("readiness_v2_summary.csv", "readiness_v2_summary"),
     ("strava_segments.csv", "strava_segments"),
+    ("unified_daily_metrics.csv", "unified_daily_metrics"),
+]
+
+# 동기화 대상 요약 TXT / JSON 파일 및 Google 스프레드시트 이름 매핑
+TXT_SYNC_TARGETS = [
+    ("latest_ride_1s_summary.txt", "latest_ride_1s_summary"),
+    ("unified_coaching_summary.txt", "unified_coaching_summary"),
+]
+
+# 동기화 대상 원본 파일(JSON 등) 매핑 (Drive 폴더 내 일반 파일 덮어쓰기)
+RAW_FILE_SYNC_TARGETS = [
+    ("unified_coaching_state.json", "application/json"),
 ]
 
 # 동기화 대상 1초 통합 요약 TXT 파일 및 Google 스프레드시트 이름 매핑
@@ -139,7 +151,7 @@ def update_google_sheet_from_csv(drive_service, folder_id, csv_path, sheet_name)
 def update_google_sheet_from_txt(drive_service, folder_id, txt_path, sheet_name):
     """
     요약 TXT 파일의 각 줄을 'summary_line' 단일 열 CSV로 변환해
-    대상 Google 스프레드시트를 덮어씁니다.
+    대상 Google 스프레드시트를 덮어씁니다. (빈 줄, === 제목줄, #ERROR! 필터링 포함)
     """
     if not os.path.exists(txt_path):
         print(f"⚠️ 로컬 요약 TXT 파일 없음 (건너뜀): {txt_path}")
@@ -147,7 +159,13 @@ def update_google_sheet_from_txt(drive_service, folder_id, txt_path, sheet_name)
 
     try:
         with open(txt_path, "r", encoding="utf-8") as f:
-            lines = [line.rstrip("\r\n") for line in f.readlines()]
+            lines = [
+                line.strip()
+                for line in f.readlines()
+                if line.strip()
+                and not line.strip().startswith("===")
+                and "#ERROR!" not in line
+            ]
 
         if not lines:
             lines = ["데이터 없음"]
@@ -168,8 +186,47 @@ def update_google_sheet_from_txt(drive_service, folder_id, txt_path, sheet_name)
         print(f"❌ TXT 처리 중 오류 ({txt_path}): {e}")
 
 
+def upsert_raw_file_to_drive(drive_service, folder_id, file_path, mime_type):
+    """
+    unified_coaching_state.json 등 원본 파일을 Google Drive 대상 폴더에
+    업데이트하거나 신규 생성합니다.
+    """
+    if not os.path.exists(file_path):
+        print(f"⚠️ 로컬 원본 파일 없음 (건너뜀): {file_path}")
+        return
+
+    filename = os.path.basename(file_path)
+    try:
+        with open(file_path, "rb") as f:
+            raw_bytes = f.read()
+
+        media = MediaIoBaseUpload(
+            io.BytesIO(raw_bytes),
+            mimetype=mime_type,
+            resumable=True,
+        )
+        existing_id = find_existing_file(drive_service, folder_id, filename)
+        if existing_id:
+            drive_service.files().update(
+                fileId=existing_id,
+                media_body=media,
+                supportsAllDrives=True,
+            ).execute()
+            print(f"🔄 Google Drive 파일 덮어쓰기 완료: {filename}")
+        else:
+            metadata = {"name": filename, "parents": [folder_id]}
+            drive_service.files().create(
+                body=metadata,
+                media_body=media,
+                supportsAllDrives=True,
+            ).execute()
+            print(f"🆕 Google Drive 파일 신규 생성 완료: {filename}")
+    except Exception as e:
+        print(f"❌ 원본 파일 업로드 오류 ({filename}): {e}")
+
+
 def main():
-    """핵심 CSV 및 요약 TXT 파일을 Google Drive 스프레드시트에 동기화합니다."""
+    """핵심 CSV, 요약 TXT 및 통합 코칭 상태 JSON을 Google Drive에 동기화합니다."""
     print("🚀 Google Drive 자동 동기화를 시작합니다...")
     try:
         drive_service, folder_id, client_email = _create_drive_service()
@@ -183,9 +240,13 @@ def main():
     for csv_file, sheet_name in CSV_SYNC_TARGETS:
         update_google_sheet_from_csv(drive_service, folder_id, csv_file, sheet_name)
 
-    # 2. 1초 통합 요약 TXT -> 기존 Google 스프레드시트 덮어쓰기
+    # 2. 요약 TXT -> 기존 Google 스프레드시트 덮어쓰기
     for txt_file, sheet_name in TXT_SYNC_TARGETS:
         update_google_sheet_from_txt(drive_service, folder_id, txt_file, sheet_name)
+
+    # 3. 통합 분석 엔진 JSON 원본 -> Google Drive 폴더 업로드
+    for raw_file, mime_type in RAW_FILE_SYNC_TARGETS:
+        upsert_raw_file_to_drive(drive_service, folder_id, raw_file, mime_type)
 
     print("🎉 Google Drive 동기화 작업이 완료되었습니다.")
 
