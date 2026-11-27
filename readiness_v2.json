@@ -1,18 +1,17 @@
 {
   "engine_version": "v2",
-  "as_of_kst": "2026-11-27 08:44:22",
-  "score": 76.8,
+  "as_of_kst": "2026-11-27 09:10:18",
+  "score": 76.6,
   "score_range": [
-    76.8,
-    76.8
+    76.6,
+    76.6
   ],
   "confidence": "높음",
   "completeness_pct": 100.0,
   "permission_grade": "B",
   "permission_label": "B · 강도 조정 (파워 5~10% 하향 또는 세트 축소)",
   "gate_reasons": [
-    "준비도 76.8점 (60~79)",
-    "Body Battery 9 (30 이하)"
+    "준비도 76.6점 (60~79)"
   ],
   "breakdown": {
     "training_balance": {
@@ -22,34 +21,34 @@
       "detail": "TSB -10.4, ACWR 1.46"
     },
     "sleep_recovery": {
-      "score": 17.3,
+      "score": 17.1,
       "max": 20.0,
-      "label": "6.38h",
-      "detail": "수면점수 76점 · 3일부채 1.9h(3일합 19.1h)"
+      "label": "6.37h",
+      "detail": "수면점수 72점 · 3일부채 2.5h(3일합 18.5h)"
     },
     "hrv_trend": {
       "score": 15.0,
       "max": 15.0,
-      "label": "33ms · 기준 범위 내 안정",
-      "detail": "기준 27.0-33.0ms (7일 평균 대비 +7.4%)"
+      "label": "28ms · 기준 범위 내 안정",
+      "detail": "기준 27.0-34.0ms (7일 평균 대비 -4.4%)"
     },
     "recovery_time": {
       "score": 0.0,
       "max": 15.0,
-      "label": "남은 22.3h",
-      "detail": "시간당 -1점 감점(최대 15점) · 경과 13.7h · IF×TSS 66.0(권장 36.0h)"
+      "label": "남은 21.8h",
+      "detail": "시간당 -1점 감점(최대 15점) · 경과 14.2h · IF×TSS 66.0(권장 36.0h)"
     },
     "resting_hr": {
       "score": 15.0,
       "max": 15.0,
-      "label": "48 bpm",
-      "detail": "7일 평균 50.7bpm 대비 -2.7bpm"
+      "label": "52 bpm",
+      "detail": "7일 평균 51.4bpm 대비 +0.6bpm"
     },
     "stress_activity": {
       "score": 8.0,
       "max": 10.0,
-      "label": "스트레스 34",
-      "detail": "7일 평균 33.7"
+      "label": "스트레스 28",
+      "detail": "7일 평균 32.3"
     }
   },
   "notes": [],
