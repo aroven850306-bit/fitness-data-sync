@@ -1,3 +1,6 @@
+오류 없는 깔끔한 상태로 **`build_unified_coaching_engine.py` 전체 코드**를 다시 생성하겠습니다.
+
+```python:통합 분석 엔진 파이썬 스크립트 (일·주·월·대회 전 4계층 판단):build_unified_coaching_engine.py
 #!/usr/bin/env python3
 """
 사이클링 통합 분석 엔진 (build_unified_coaching_engine.py)
@@ -73,7 +76,6 @@ def _parse_datetime(val: Any) -> Optional[datetime]:
     s = str(val).strip()
     if not s or s.lower() in ("nan", "none", "nat"):
         return None
-    # ISO 끝의 Z 또는 타임존 오프셋 제거 후 표준 포맷 파싱
     s_clean = re.sub(r"([+-]\d{2}:\d{2}|Z)$", "", s).replace("T", " ").strip()
     for fmt in (
         "%Y-%m-%d %H:%M:%S.%f",
@@ -174,7 +176,7 @@ def _read_csv_safe(filename: str) -> pd.DataFrame:
 
 
 def _read_latest_1s_summary() -> Dict[str, Any]:
-    """latest_ride_1s_summary.txt 또는 CSV에서 직전 1회 블록 수행률 및 후보 eFTP/eLTHR 정보를 파싱합니다."""
+    """latest_ride_1s_summary.txt에서 직전 1회 블록 수행률 및 후보 eFTP/eLTHR 정보를 파싱합니다."""
     out: Dict[str, Any] = {
         "raw_text": "",
         "detected_blocks": [],
@@ -190,7 +192,6 @@ def _read_latest_1s_summary() -> Dict[str, Any]:
         text = txt_path.read_text(encoding="utf-8", errors="ignore").strip()
         out["raw_text"] = text
 
-        # 후보 eFTP / eLTHR 감지 문구 파싱
         eftp_match = re.search(r"후보\s*eFTP\s*([0-9]+(?:\.[0-9]+)?)\s*W", text)
         if eftp_match:
             out["candidate_eftp_w"] = _to_float(eftp_match.group(1), 1)
@@ -199,7 +200,6 @@ def _read_latest_1s_summary() -> Dict[str, Any]:
         if elthr_match:
             out["candidate_elthr_bpm"] = _to_int(elthr_match.group(1))
 
-        # 블록 요약 추출 (WARMUP / WORK / RECOVERY / COOLDOWN)
         block_matches = re.findall(
             r"(WARMUP|WORK|RECOVERY|COOLDOWN)\s+([^\d]+?)\s+(\d{2}:\d{2})\s+(\d{2}:\d{2})\s+([0-9]+(?:\.[0-9]+)?)W",
             text,
@@ -249,7 +249,6 @@ def build_unified_sessions(
     Garmin 활동을 1순위 마스터로 삼고, FIT 1초 정밀 분석(1순위 출력)과
     Strava 확장 데이터(RPE, 칼로리, 경사 스트림, 세그먼트 PR/업힐)를 중복 없이 병합합니다.
     """
-    # 1. fit_analysis_report 인덱싱 (activity_id 또는 파일명 날짜 기반)
     fit_by_id: Dict[str, Dict[str, Any]] = {}
     fit_by_date: Dict[str, List[Dict[str, Any]]] = {}
     if not fit_df.empty:
@@ -263,7 +262,6 @@ def build_unified_sessions(
             if date_m:
                 fit_by_date.setdefault(date_m.group(1), []).append(row_dict)
 
-    # 2. strava_segments 활동별 집계
     seg_by_strava_id: Dict[str, Dict[str, Any]] = {}
     if not strava_seg_df.empty and "activity_id" in strava_seg_df.columns:
         for act_id_val, grp in strava_seg_df.groupby("activity_id"):
@@ -274,7 +272,6 @@ def build_unified_sessions(
                 "seg_pr_count_calc": int(len(pr_rows)),
             }
 
-    # 3. Strava 활동 목록 파싱 (매칭 추적용 used 플래그 포함)
     strava_records: List[Dict[str, Any]] = []
     if not strava_act_df.empty:
         for _, r in strava_act_df.iterrows():
@@ -290,7 +287,6 @@ def build_unified_sessions(
 
     unified_rows: List[Dict[str, Any]] = []
 
-    # 4. Garmin 활동 순회 (1순위 마스터)
     if not garmin_act_df.empty:
         for _, r in garmin_act_df.iterrows():
             g = r.to_dict()
@@ -301,17 +297,14 @@ def build_unified_sessions(
             date_str = dt.strftime("%Y-%m-%d")
             dur_garmin = _to_float(g.get("duration_min"), 1) or 0.0
 
-            # FIT 1초 정밀 분석 매칭
             fit_row = fit_by_id.get(act_id)
             if fit_row is None and date_str in fit_by_date:
-                # 같은 날짜 중 운동 시간이 3분 이내로 유사한 FIT 매칭
                 for cand in fit_by_date[date_str]:
                     f_dur = _to_float(cand.get("duration_min"), 1) or 0.0
                     if abs(f_dur - dur_garmin) <= 3.0:
                         fit_row = cand
                         break
 
-            # Strava 동일 세션 매칭 (±15분 시작시각 또는 동일 날짜 + 시간 오차 4분 이내)
             matched_strava: Optional[Dict[str, Any]] = None
             best_diff = 999999.0
             for s in strava_records:
@@ -330,7 +323,6 @@ def build_unified_sessions(
             if matched_strava is not None:
                 matched_strava["_used"] = True
 
-            # 우선순위 기반 핵심 수치 결정 (1순위 FIT -> 2순위 Garmin -> 3순위 Strava)
             dur_final = (
                 _to_float(fit_row.get("duration_min"), 1) if fit_row else None
             ) or dur_garmin or (matched_strava["_dur_min"] if matched_strava else 0.0)
@@ -349,7 +341,6 @@ def build_unified_sessions(
 
             tss_194 = compute_standard_tss(dur_final, np_watts, official_ftp)
             if tss_194 is None:
-                # 파워 미기록 세션만 가민 TSS 백업 사용
                 tss_194 = _to_float(g.get("training_stress_score_TSS"), 2) or 0.0
 
             if_194 = round(np_watts / official_ftp, 3) if (np_watts and official_ftp > 0) else _to_float(g.get("intensity_factor_IF"), 3)
@@ -371,7 +362,6 @@ def build_unified_sessions(
 
             decoupling_pct = _to_float(fit_row.get("aerobic_decoupling_pct"), 2) if fit_row else None
 
-            # 파워 존 분(min) 집계 (FIT 1순위, Strava 백업)
             z1_min = _to_float(fit_row.get("Z1_recovery_min"), 1) if fit_row else (
                 _to_float(matched_strava.get("strava_pz1_min"), 1) if matched_strava else None
             )
@@ -454,7 +444,6 @@ def build_unified_sessions(
                 }
             )
 
-    # 5. Garmin에 없는 Strava 단독 활동만 백업 추가 (중복 합산 원천 차단)
     for s in strava_records:
         if s["_used"]:
             continue
@@ -552,7 +541,6 @@ def build_daily_timeseries(
     min_date = min(start_dates)
     all_dates = pd.date_range(start=min_date, end=today_date, freq="D")
 
-    # 일별 활동 집계
     daily_act_map: Dict[str, Dict[str, Any]] = {}
     if not sessions_df.empty:
         for date_str, grp in sessions_df.groupby("date"):
@@ -568,7 +556,6 @@ def build_daily_timeseries(
                 "z5_plus_min": round(float(grp["z5_plus_min"].fillna(0).sum()), 1),
             }
 
-    # 일별 웰니스 매핑
     health_map: Dict[str, Dict[str, Any]] = {}
     if not health_df.empty and "date" in health_df.columns:
         for _, r in health_df.iterrows():
@@ -576,7 +563,6 @@ def build_daily_timeseries(
             if dt_h:
                 health_map[dt_h.strftime("%Y-%m-%d")] = r.to_dict()
 
-    # EWMA 상수 (42일 CTL / 7일 ATL)
     k_ctl = 1.0 - math.exp(-1.0 / 42.0)
     k_atl = 1.0 - math.exp(-1.0 / 7.0)
     ctl = 0.0
@@ -639,7 +625,6 @@ def build_daily_timeseries(
 
     daily_df = pd.DataFrame(rows)
 
-    # 직전 세션 종료 후 경과 시간(Δh) 반영 실시간 급성 피로 감쇠
     now_naive = now_kst.replace(tzinfo=None)
     latest_row = daily_df.iloc[-1].to_dict()
     live_ctl = float(latest_row["ctl_42d"])
@@ -653,7 +638,6 @@ def build_daily_timeseries(
         if pd.notna(end_dt):
             diff_h = max(0.0, (now_naive - end_dt).total_seconds() / 3600.0)
             elapsed_hours = round(diff_h, 1)
-            # 당일 운동이 없는 상태에서 전일 운동 후 경과 시간에 따른 연속 지수 감쇠 보정
             if float(latest_row["tss_194"]) == 0.0 and diff_h > 0:
                 frac_days = min(diff_h / 24.0, 1.0)
                 prev_row = daily_df.iloc[-2].to_dict() if len(daily_df) >= 2 else latest_row
@@ -687,7 +671,6 @@ def build_daily_timeseries(
     live_tsb_r = round(live_ctl - live_atl, 1)
     live_acwr_r = round(live_atl / live_ctl, 2) if live_ctl > 0.1 else 0.0
 
-    # 마지막 행을 실시간 감쇠 값과 동기화
     daily_df.loc[daily_df.index[-1], "ctl_42d"] = live_ctl_r
     daily_df.loc[daily_df.index[-1], "atl_7d"] = live_atl_r
     daily_df.loc[daily_df.index[-1], "tsb"] = live_tsb_r
@@ -717,12 +700,10 @@ def compute_layer1_daily(
     today_str = now_kst.strftime("%Y-%m-%d")
     today_row = daily_df.iloc[-1].to_dict()
 
-    # D2: 3일 누적 수면 부채 (목표 7.0h/일 기준)
     recent_3d = daily_df.tail(3)
     valid_sleeps = [float(x) for x in recent_3d["sleep_hours"].dropna().tolist()]
     sleep_debt_3d = round(sum(s - 7.0 for s in valid_sleeps), 2) if valid_sleeps else None
 
-    # D3: 자율신경 회복 편차 (최근 7일 평균 대비 HRV % 및 RHR bpm 차이)
     recent_7d = daily_df.tail(7)
     hrv_curr = _to_int(today_row.get("hrv_last_night_avg"))
     hrv_7d_vals = [float(x) for x in recent_7d["hrv_last_night_avg"].dropna().tolist()]
@@ -738,7 +719,6 @@ def compute_layer1_daily(
     rhr_7d_avg = round(float(np.mean(rhr_7d_vals)), 1) if rhr_7d_vals else None
     rhr_delta_bpm = round(rhr_curr - rhr_7d_avg, 1) if (rhr_curr is not None and rhr_7d_avg is not None) else None
 
-    # readiness_v2_summary 최신 행 조회
     r_score = None
     r_grade = None
     r_conf = None
@@ -753,7 +733,6 @@ def compute_layer1_daily(
         r_comp = _to_int(r_latest.get("completeness_pct"))
         r_reasons = r_latest.get("gate_reasons") if pd.notna(r_latest.get("gate_reasons")) else None
 
-    # D1: 안전 게이트 교차 검증 및 당일 훈련 완료 후 보류 규칙
     trained_today = int(today_row.get("session_count") or 0) > 0
     gate_overrides: List[str] = []
 
@@ -779,7 +758,6 @@ def compute_layer1_daily(
     else:
         effective_status = f"{r_grade or '확인 못 함'}등급 활성"
 
-    # 가민 부하 포커스 3종: 당일 공란 시 가장 최근 유효 행 자동 참조
     lf_valid = daily_df.dropna(subset=["load_low_aerobic", "load_high_aerobic", "load_anaerobic"])
     load_focus_latest: Optional[Dict[str, Any]] = None
     if not lf_valid.empty:
@@ -845,13 +823,11 @@ def compute_layer2_weekly(
     completed_tss = round(float(week_df["tss_194"].fillna(0).sum()), 1)
     completion_pct = round((completed_tss / weekly_planned_tss) * 100.0, 1) if weekly_planned_tss > 0 else 0.0
 
-    # W2: 주간 폴라라이즈드 저강도(Z1+Z2) 시간 비중
     tot_dur = float(week_df["duration_min"].fillna(0).sum())
     low_dur = float(week_df["z1_min"].fillna(0).sum() + week_df["z2_min"].fillna(0).sum())
     polarized_low_pct = round((low_dur / tot_dur) * 100.0, 1) if tot_dur > 0 else None
     junk_miles_warning = bool(polarized_low_pct is not None and polarized_low_pct < 65.0 and tot_dur >= 90.0)
 
-    # W4: 최근 7일 훈련 단조로움(Monotony) & 스트레인(Strain)
     rolling_7d = daily_df.tail(7)["tss_194"].fillna(0).to_numpy(dtype=float)
     tss_7d_sum = round(float(np.sum(rolling_7d)), 1)
     mean_7d = float(np.mean(rolling_7d)) if len(rolling_7d) > 0 else 0.0
@@ -860,7 +836,6 @@ def compute_layer2_weekly(
     strain = round(tss_7d_sum * monotony, 1) if monotony is not None else None
     monotony_warning = bool(monotony is not None and monotony > 2.0)
 
-    # W5: 주간 CTL 램프율 (현재 CTL - 7일 전 CTL)
     ctl_now = float(daily_df.iloc[-1]["ctl_42d"])
     ctl_7d_ago = float(daily_df.iloc[-8]["ctl_42d"]) if len(daily_df) >= 8 else float(daily_df.iloc[0]["ctl_42d"])
     ctl_ramp_7d = round(ctl_now - ctl_7d_ago, 1)
@@ -911,7 +886,6 @@ def compute_layer3_monthly_28d(
         s_28d = sessions_df[sessions_df["start_dt"] >= cutoff_28d]
         s_prev_28d = sessions_df[(sessions_df["start_dt"] >= cutoff_56d) & (sessions_df["start_dt"] < cutoff_28d)]
 
-        # M1: 순수 Z2 세션(45분 이상 & IF <= 0.68) 유산소 효율(EF) 및 드리프트
         z2_curr = s_28d[(s_28d["duration_min"] >= 45.0) & (s_28d["if_194"] <= 0.68) & (s_28d["ef"].notna())]
         if not z2_curr.empty:
             z2_avg_ef = round(float(z2_curr["ef"].mean()), 2)
@@ -926,7 +900,6 @@ def compute_layer3_monthly_28d(
         if z2_avg_ef is not None and z2_prev_ef is not None and z2_prev_ef > 0:
             z2_ef_delta_pct = round(((z2_avg_ef - z2_prev_ef) / z2_prev_ef) * 100.0, 1)
 
-        # M2: 최근 28일 다중 구간 피크 파워(MMP)
         if not s_28d.empty:
             if s_28d["mmp_1m"].notna().any():
                 mmp_1m_28d = round(float(s_28d["mmp_1m"].max()), 1)
@@ -938,7 +911,6 @@ def compute_layer3_monthly_28d(
                 if est_20m_ftp > official_ftp:
                     candidate_eftp_w = est_20m_ftp
 
-        # M3: 동일 출력 구간 심박 비용 (템포 140~160W / 역치 185~200W 세션 평균 심박)
         tempo_sub = s_28d[(s_28d["np_watts"] >= 140.0) & (s_28d["np_watts"] <= 160.0) & (s_28d["avg_hr"].notna())]
         if not tempo_sub.empty:
             tempo_hr_28d = round(float(tempo_sub["avg_hr"].mean()), 1)
@@ -947,7 +919,6 @@ def compute_layer3_monthly_28d(
         if not thresh_sub.empty:
             threshold_hr_28d = round(float(thresh_sub["avg_hr"].mean()), 1)
 
-    # M4: 정체·과훈련 조기 경보 (3주 연속 CTL 정체 + EF 하락 + 주간 HRV 10% 이상 저하)
     ctl_stagnant = False
     if len(daily_df) >= 22:
         ctl_now = float(daily_df.iloc[-1]["ctl_42d"])
@@ -1056,7 +1027,6 @@ def run_unified_engine(now_kst: Optional[datetime] = None) -> Dict[str, Any]:
     baseline = _load_baseline()
     official_ftp = float(baseline["official_ftp_w"])
 
-    # 원천 7종 로드
     fit_df = _read_csv_safe("fit_analysis_report.csv")
     garmin_act_df = _read_csv_safe("garmin_activities.csv")
     strava_act_df = _read_csv_safe("strava_activities.csv")
@@ -1065,7 +1035,6 @@ def run_unified_engine(now_kst: Optional[datetime] = None) -> Dict[str, Any]:
     readiness_df = _read_csv_safe("readiness_v2_summary.csv")
     latest_1s_info = _read_latest_1s_summary()
 
-    # Step A: 중복 제거 및 194W 표준 TSS 세션 통합
     sessions_df = build_unified_sessions(
         fit_df=fit_df,
         garmin_act_df=garmin_act_df,
@@ -1074,20 +1043,17 @@ def run_unified_engine(now_kst: Optional[datetime] = None) -> Dict[str, Any]:
         official_ftp=official_ftp,
     )
 
-    # Step B: 일별 통합 시계열 및 실시간 감쇠 PMC 산출
     daily_df, live_pmc = build_daily_timeseries(
         sessions_df=sessions_df,
         health_df=health_df,
         now_kst=now_kst,
     )
 
-    # Step C: 4계층 상위 판단 지표 산출
     layer1 = compute_layer1_daily(daily_df, readiness_df, live_pmc, now_kst)
     layer2 = compute_layer2_weekly(daily_df, now_kst)
     layer3 = compute_layer3_monthly_28d(sessions_df, daily_df, baseline, now_kst)
     layer4 = compute_layer4_race_readiness(sessions_df, baseline, now_kst)
 
-    # latest_ride_1s_summary에서 감지된 후보 eFTP 반영
     if layer3["candidate_eftp_w"] is None and latest_1s_info.get("candidate_eftp_w") is not None:
         if float(latest_1s_info["candidate_eftp_w"]) > official_ftp:
             layer3["candidate_eftp_w"] = latest_1s_info["candidate_eftp_w"]
@@ -1110,16 +1076,13 @@ def run_unified_engine(now_kst: Optional[datetime] = None) -> Dict[str, Any]:
         "layer4_race_readiness": layer4,
     }
 
-    # 1) 일별 통합 시계열 CSV 저장
     daily_df.to_csv(OUT_DAILY_CSV, index=False, encoding="utf-8-sig", quoting=csv.QUOTE_ALL)
 
-    # 2) 통합 코칭 상태 JSON 저장
     OUT_STATE_JSON.write_text(
         json.dumps(unified_state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
-    # 3) 단일 요약 TXT 저장
     lf = layer1.get("load_focus_latest") or {}
     lf_str = (
         f"LoadFocus({lf.get('ref_date')}): Low {lf.get('low_aerobic')} / High {lf.get('high_aerobic')} / Ana {lf.get('anaerobic')}"
