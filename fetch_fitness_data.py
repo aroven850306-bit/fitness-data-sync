@@ -480,12 +480,34 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         hrv_base_high = None
         sleep_score = None
         sleep_hours = None
+        deep_sleep_min = None
+        rem_sleep_min = None
+        max_stress = None
+        rest_stress_sec = None
+        avg_respiration = None
+        avg_spo2 = None
         steps = None
 
         try:
             stats = client.get_stats(d_str) or {}
             resting_hr = stats.get("restingHeartRate")
             avg_stress = stats.get("averageStressLevel")
+            max_stress = _find_first_value(
+                stats,
+                ["maxStressLevel", "highestStressLevel", "stressMax"],
+            )
+            rest_stress_sec = _find_first_value(
+                stats,
+                ["restStressDuration", "restStressSeconds", "lowStressDuration"],
+            )
+            avg_respiration = _find_first_value(
+                stats,
+                ["avgWakingRespirationValue", "avgRespirationValue", "averageRespirationValue"],
+            )
+            avg_spo2 = _find_first_value(
+                stats,
+                ["averageSpo2", "avgSpo2", "spo2Value"],
+            )
             bb_high = stats.get("bodyBatteryHighestValue")
             bb_low = stats.get("bodyBatteryLowestValue")
             bb_current = _find_first_value(
@@ -538,6 +560,52 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
             try:
                 stress_data = client.get_stress_data(d_str) or {}
                 avg_stress = stress_data.get("avgStressLevel")
+                if max_stress is None:
+                    max_stress = _find_first_value(
+                        stress_data,
+                        ["maxStressLevel", "highestStressLevel", "stressMax"],
+                    )
+                if rest_stress_sec is None:
+                    rest_stress_sec = _find_first_value(
+                        stress_data,
+                        ["restStressDuration", "restStressSeconds", "lowStressDuration"],
+                    )
+            except Exception:
+                pass
+
+        if max_stress is None or rest_stress_sec is None:
+            try:
+                all_day_stress = client.get_all_day_stress(d_str) or {}
+                if max_stress is None:
+                    max_stress = _find_first_value(
+                        all_day_stress,
+                        ["maxStressLevel", "highestStressLevel", "stressMax"],
+                    )
+                if rest_stress_sec is None:
+                    rest_stress_sec = _find_first_value(
+                        all_day_stress,
+                        ["restStressDuration", "restStressSeconds", "lowStressDuration"],
+                    )
+            except Exception:
+                pass
+
+        if avg_respiration is None and hasattr(client, "get_respiration_data"):
+            try:
+                resp_data = client.get_respiration_data(d_str) or {}
+                avg_respiration = _find_first_value(
+                    resp_data,
+                    ["avgWakingRespirationValue", "avgSleepRespirationValue", "avgRespirationValue", "averageRespirationValue"],
+                )
+            except Exception:
+                pass
+
+        if avg_spo2 is None and hasattr(client, "get_spo2_data"):
+            try:
+                spo2_data = client.get_spo2_data(d_str) or {}
+                avg_spo2 = _find_first_value(
+                    spo2_data,
+                    ["averageSpo2", "avgSpo2", "latestSpo2", "spo2Value"],
+                )
             except Exception:
                 pass
 
@@ -555,12 +623,35 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
         try:
             sleep_data = client.get_sleep_data(d_str) or {}
             daily_sleep = sleep_data.get("dailySleepDTO") or {}
-            sleep_sec = daily_sleep.get("sleepTimeSeconds")
+            sleep_sec = daily_sleep.get("sleepTimeSeconds") or _find_first_value(
+                sleep_data, ["sleepTimeSeconds"]
+            )
             if sleep_sec:
                 sleep_hours = round(float(sleep_sec) / 3600, 2)
             sleep_scores = daily_sleep.get("sleepScores") or {}
             overall = sleep_scores.get("overall") or {}
             sleep_score = overall.get("value") or daily_sleep.get("sleepScore")
+
+            deep_sec = daily_sleep.get("deepSleepSeconds")
+            if deep_sec is None:
+                deep_sec = _find_first_value(sleep_data, ["deepSleepSeconds", "deepSleepDurationInSeconds"])
+            if deep_sec is not None:
+                deep_sleep_min = _to_float(float(deep_sec) / 60.0, ndigits=0)
+
+            rem_sec = daily_sleep.get("remSleepSeconds")
+            if rem_sec is None:
+                rem_sec = _find_first_value(sleep_data, ["remSleepSeconds", "remSleepDurationInSeconds"])
+            if rem_sec is not None:
+                rem_sleep_min = _to_float(float(rem_sec) / 60.0, ndigits=0)
+
+            if avg_respiration is None:
+                avg_respiration = _find_first_value(
+                    daily_sleep, ["averageRespirationValue", "avgRespirationValue"]
+                ) or _find_first_value(sleep_data, ["averageRespirationValue", "avgRespirationValue"])
+            if avg_spo2 is None:
+                avg_spo2 = _find_first_value(
+                    daily_sleep, ["averageSpO2Value", "averageSpo2", "avgSpo2"]
+                ) or _find_first_value(sleep_data, ["averageSpO2Value", "averageSpo2", "avgSpo2"])
         except Exception:
             pass
 
@@ -571,6 +662,8 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
                 "date": d_str,
                 "resting_hr": resting_hr,
                 "avg_stress": avg_stress,
+                "max_stress": _to_float(max_stress, ndigits=0),
+                "rest_stress_sec": _to_float(rest_stress_sec, ndigits=0),
                 "body_battery_high": bb_high,
                 "body_battery_low": bb_low,
                 "body_battery_current": bb_current,
@@ -580,6 +673,10 @@ def fetch_garmin_health(client: Garmin, days: int = WELLNESS_DAYS) -> pd.DataFra
                 "hrv_baseline_high": hrv_base_high,
                 "sleep_score": sleep_score,
                 "sleep_hours": sleep_hours,
+                "deep_sleep_min": deep_sleep_min,
+                "rem_sleep_min": rem_sleep_min,
+                "avg_respiration": _to_float(avg_respiration, ndigits=1),
+                "avg_spo2": _to_float(avg_spo2, ndigits=0),
                 "steps": steps,
                 "training_readiness_score": rl_info["training_readiness_score"],
                 "training_readiness_level": rl_info["training_readiness_level"],
