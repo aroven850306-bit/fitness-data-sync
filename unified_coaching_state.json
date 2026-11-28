@@ -1,6 +1,6 @@
 {
   "engine_version": "v2.6.1",
-  "generated_at_kst": "2026-11-29 00:45:34 KST",
+  "generated_at_kst": "2026-11-29 01:46:10 KST",
   "as_of_date": "2026-11-29",
   "baselines": {
     "official_ftp_watts": 194.0,
@@ -36,9 +36,9 @@
     "hrv_today": null,
     "hrv_7d_avg": 29.2,
     "hrv_delta_pct": null,
-    "rhr_today": null,
-    "rhr_7d_avg": 51.8,
-    "rhr_delta_bpm": null,
+    "rhr_today": 56.0,
+    "rhr_7d_avg": 52.4,
+    "rhr_delta_bpm": 3.6,
     "load_focus_date": "2026-11-27",
     "load_focus_3": {
       "low_aerobic": 944.9,
